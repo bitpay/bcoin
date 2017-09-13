@@ -1,18 +1,18 @@
-var assert = require('assert');
-var bcoin = require('../');
-var encoding = require('../lib/utils/encoding');
-var BufferWriter = require('../lib/utils/writer');
-var BufferReader = require('../lib/utils/reader');
-var util = require('../lib/utils/util');
-var co = bcoin.co;
-var file = process.argv[2];
-var db, batch;
+'use strict';
+
+const assert = require('assert');
+const bcoin = require('../');
+const encoding = require('../lib/utils/encoding');
+const BufferWriter = require('../lib/utils/writer');
+const BufferReader = require('../lib/utils/reader');
+let file = process.argv[2];
+let batch;
 
 assert(typeof file === 'string', 'Please pass in a database path.');
 
 file = file.replace(/\.ldb\/?$/, '');
 
-db = bcoin.ldb({
+const db = bcoin.ldb({
   location: file,
   db: 'leveldb',
   compression: true,
@@ -21,40 +21,38 @@ db = bcoin.ldb({
   bufferKeys: true
 });
 
-var updateVersion = co(function* updateVersion() {
-  var bak = process.env.HOME + '/walletdb-bak-' + Date.now() + '.ldb';
-  var data, ver;
+async function updateVersion() {
+  const bak = `${process.env.HOME}/walletdb-bak-${Date.now()}.ldb`;
 
   console.log('Checking version.');
 
-  data = yield db.get('V');
+  const data = await db.get('V');
   assert(data, 'No version.');
 
-  ver = data.readUInt32LE(0, true);
+  let ver = data.readUInt32LE(0, true);
 
   if (ver !== 5)
-    throw Error('DB is version ' + ver + '.');
+    throw Error(`DB is version ${ver}.`);
 
   console.log('Backing up DB to: %s.', bak);
 
-  yield db.backup(bak);
+  await db.backup(bak);
 
-  ver = new Buffer(4);
+  ver = Buffer.allocUnsafe(4);
   ver.writeUInt32LE(6, 0, true);
   batch.put('V', ver);
-});
+}
 
-var wipeTXDB = co(function* wipeTXDB() {
-  var total = 0;
-  var i, keys, key;
+async function wipeTXDB() {
+  let total = 0;
 
-  keys = yield db.keys({
-    gte: new Buffer([0x00]),
-    lte: new Buffer([0xff])
+  const keys = await db.keys({
+    gte: Buffer.from([0x00]),
+    lte: Buffer.from([0xff])
   });
 
-  for (i = 0; i < keys.length; i++) {
-    key = keys[i];
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
     switch (key[0]) {
       case 0x62: // b
       case 0x63: // c
@@ -68,69 +66,63 @@ var wipeTXDB = co(function* wipeTXDB() {
     }
   }
 
-  batch.del(new Buffer([0x52])); // R
+  batch.del(Buffer.from([0x52])); // R
 
   console.log('Wiped %d txdb records.', total);
-});
+}
 
-var patchAccounts = co(function* patchAccounts() {
-  var i, items, item, wid, index, account;
-
-  items = yield db.range({
-    gte: new Buffer('610000000000000000', 'hex'), // a
-    lte: new Buffer('61ffffffffffffffff', 'hex')  // a
+async function patchAccounts() {
+  const items = await db.range({
+    gte: Buffer.from('610000000000000000', 'hex'), // a
+    lte: Buffer.from('61ffffffffffffffff', 'hex')  // a
   });
 
-  for (i = 0; i < items.length; i++) {
-    item = items[i];
-    wid = item.key.readUInt32BE(1, true);
-    index = item.key.readUInt32BE(5, true);
-    account = accountFromRaw(item.value);
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const wid = item.key.readUInt32BE(1, true);
+    const index = item.key.readUInt32BE(5, true);
+    const account = accountFromRaw(item.value);
     console.log('a[%d][%d] -> lookahead=%d', wid, index, account.lookahead);
     batch.put(item.key, accountToRaw(account));
     console.log('n[%d][%d] -> %s', wid, index, account.name);
-    batch.put(n(wid, index), new Buffer(account.name, 'ascii'));
+    batch.put(n(wid, index), Buffer.from(account.name, 'ascii'));
   }
-});
+}
 
-var indexPaths = co(function* indexPaths() {
-  var i, items, item, wid, index, hash;
-
-  items = yield db.range({
-    gte: new Buffer('5000000000' + encoding.NULL_HASH, 'hex'), // P
-    lte: new Buffer('50ffffffff' + encoding.HIGH_HASH, 'hex')  // P
+async function indexPaths() {
+  const items = await db.range({
+    gte: Buffer.from('5000000000' + encoding.NULL_HASH, 'hex'), // P
+    lte: Buffer.from('50ffffffff' + encoding.HIGH_HASH, 'hex')  // P
   });
 
-  for (i = 0; i < items.length; i++) {
-    item = items[i];
-    wid = item.key.readUInt32BE(1, true);
-    hash = item.key.toString('hex', 5);
-    index = item.value.readUInt32LE(0, true);
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const wid = item.key.readUInt32BE(1, true);
+    const hash = item.key.toString('hex', 5);
+    const index = item.value.readUInt32LE(0, true);
     console.log('r[%d][%d][%s] -> NUL', wid, index, hash);
-    batch.put(r(wid, index, hash), new Buffer([0]));
+    batch.put(r(wid, index, hash), Buffer.from([0]));
   }
-});
+}
 
-var patchPathMaps = co(function* patchPathMaps() {
-  var i, items, item, hash, wids;
-
-  items = yield db.range({
-    gte: new Buffer('70' + encoding.NULL_HASH, 'hex'), // p
-    lte: new Buffer('70' + encoding.HIGH_HASH, 'hex')  // p
+async function patchPathMaps() {
+  const items = await db.range({
+    gte: Buffer.from('70' + encoding.NULL_HASH, 'hex'), // p
+    lte: Buffer.from('70' + encoding.HIGH_HASH, 'hex')  // p
   });
 
-  for (i = 0; i < items.length; i++) {
-    item = items[i];
-    hash = item.key.toString('hex', 1);
-    wids = parseWallets(item.value);
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const hash = item.key.toString('hex', 1);
+    const wids = parseWallets(item.value);
     console.log('p[%s] -> u32(%d)', hash, wids.length);
     batch.put(item.key, serializeWallets(wids));
   }
-});
+}
 
 function parseWallets(data) {
-  var p = new BufferReader(data);
-  var wids = [];
+  const p = new BufferReader(data);
+  const wids = [];
 
   while (p.left())
     wids.push(p.readU32());
@@ -139,13 +131,12 @@ function parseWallets(data) {
 }
 
 function serializeWallets(wids) {
-  var p = new BufferWriter();
-  var i, wid;
+  const p = new BufferWriter();
 
   p.writeU32(wids.length);
 
-  for (i = 0; i < wids.length; i++) {
-    wid = wids[i];
+  for (let i = 0; i < wids.length; i++) {
+    const wid = wids[i];
     p.writeU32(wid);
   }
 
@@ -153,8 +144,7 @@ function serializeWallets(wids) {
 }
 
 function accountToRaw(account) {
-  var p = new BufferWriter();
-  var i, key;
+  const p = new BufferWriter();
 
   p.writeVarString(account.name, 'ascii');
   p.writeU8(account.initialized ? 1 : 0);
@@ -170,8 +160,8 @@ function accountToRaw(account) {
   p.writeBytes(account.accountKey);
   p.writeU8(account.keys.length);
 
-  for (i = 0; i < account.keys.length; i++) {
-    key = account.keys[i];
+  for (let i = 0; i < account.keys.length; i++) {
+    const key = account.keys[i];
     p.writeBytes(key);
   }
 
@@ -179,9 +169,8 @@ function accountToRaw(account) {
 };
 
 function accountFromRaw(data) {
-  var account = {};
-  var p = new BufferReader(data);
-  var i, count, key;
+  const account = {};
+  const p = new BufferReader(data);
 
   account.name = p.readVarString('ascii');
   account.initialized = p.readU8() === 1;
@@ -197,10 +186,10 @@ function accountFromRaw(data) {
   account.accountKey = p.readBytes(82);
   account.keys = [];
 
-  count = p.readU8();
+  const count = p.readU8();
 
-  for (i = 0; i < count; i++) {
-    key = p.readBytes(82);
+  for (let i = 0; i < count; i++) {
+    const key = p.readBytes(82);
     account.keys.push(key);
   }
 
@@ -208,7 +197,7 @@ function accountFromRaw(data) {
 }
 
 function n(wid, index) {
-  var key = new Buffer(9);
+  const key = Buffer.allocUnsafe(9);
   key[0] = 0x6e;
   key.writeUInt32BE(wid, 1, true);
   key.writeUInt32BE(index, 5, true);
@@ -216,7 +205,7 @@ function n(wid, index) {
 }
 
 function r(wid, index, hash) {
-  var key = new Buffer(1 + 4 + 4 + (hash.length / 2));
+  const key = Buffer.allocUnsafe(1 + 4 + 4 + (hash.length / 2));
   key[0] = 0x72;
   key.writeUInt32BE(wid, 1, true);
   key.writeUInt32BE(index, 5, true);
@@ -224,11 +213,10 @@ function r(wid, index, hash) {
   return key;
 }
 
-var updateLookahead = co(function* updateLookahead() {
-  var WalletDB = require('../lib/wallet/walletdb');
-  var i, j, db, wallet;
+async function updateLookahead() {
+  const WalletDB = require('../lib/wallet/walletdb');
 
-  db = new WalletDB({
+  const db = new WalletDB({
     network: process.argv[3],
     db: 'leveldb',
     location: file,
@@ -239,41 +227,43 @@ var updateLookahead = co(function* updateLookahead() {
     verify: false
   });
 
-  yield db.open();
+  await db.open();
 
-  for (i = 1; i < db.depth; i++) {
-    wallet = yield db.get(i);
+  for (let i = 1; i < db.depth; i++) {
+    const wallet = await db.get(i);
     assert(wallet);
     console.log('Updating wallet lookahead: %s', wallet.id);
-    for (j = 0; j < wallet.accountDepth; j++)
-      yield wallet.setLookahead(j, 20);
+    for (let j = 0; j < wallet.accountDepth; j++)
+      await wallet.setLookahead(j, 20);
   }
 
-  yield db.close();
-});
+  await db.close();
+}
 
-var unstate = co(function* unstate() {
-  yield db.open();
+async function unstate() {
+  await db.open();
   batch = db.batch();
-  yield wipeTXDB();
-  yield batch.write();
-  yield db.close();
-});
+  await wipeTXDB();
+  await batch.write();
+  await db.close();
+}
 
-co.spawn(function* () {
-  yield db.open();
+(async () => {
+  await db.open();
   batch = db.batch();
   console.log('Opened %s.', file);
-  yield updateVersion();
-  yield wipeTXDB();
-  yield patchAccounts();
-  yield indexPaths();
-  yield patchPathMaps();
-  yield batch.write();
-  yield db.close();
-  // yield updateLookahead();
-  // yield unstate();
-}).then(function() {
+  await updateVersion();
+  await wipeTXDB();
+  await patchAccounts();
+  await indexPaths();
+  await patchPathMaps();
+  await batch.write();
+  await db.close();
+
+  // Do not use:
+  await updateLookahead();
+  await unstate();
+})().then(() => {
   console.log('Migration complete.');
   console.log('Rescan is required...');
   console.log('Start bcoin with `--start-height=[wallet-creation-height]`.');

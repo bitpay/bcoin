@@ -4,14 +4,12 @@
 
 process.title = 'bcoin';
 
-var assert = require('assert');
-var bcoin = require('../');
-var plugin = require('../lib/wallet/plugin');
-var util = bcoin.util;
-var co = bcoin.co;
-var node;
+const assert = require('assert');
+const SPVNode = require('../lib/node/spvnode');
+const util = require('../lib/utils/util');
+const Outpoint = require('../lib/primitives/outpoint');
 
-node = bcoin.spvnode({
+const node = SPVNode({
   config: true,
   argv: true,
   env: true,
@@ -20,27 +18,30 @@ node = bcoin.spvnode({
   logLevel: 'debug',
   db: 'leveldb',
   persistent: true,
+  workers: true,
   listen: true,
   loader: require
 });
 
 // Temporary hack
-if (!node.has('walletdb'))
+if (!node.has('walletdb')) {
+  const plugin = require('../lib/wallet/plugin');
   node.use(plugin);
+}
 
-node.on('error', function(err) {
-  ;
+process.on('unhandledRejection', (err, promise) => {
+  throw err;
 });
 
-co.spawn(function *() {
-  yield node.ensure();
-  yield node.open();
-  yield node.connect();
+(async () => {
+  await node.ensure();
+  await node.open();
+  await node.connect();
 
   if (node.config.bool('test')) {
     node.pool.watchAddress('1VayNert3x1KzbpzMGt2qdqrAThiRovi8');
-    node.pool.watchOutpoint(new bcoin.outpoint());
-    node.on('block', function(block) {
+    node.pool.watchOutpoint(new Outpoint());
+    node.on('block', (block) => {
       assert(block.txs.length >= 1);
       if (block.txs.length > 1)
         util.log(block.txs[1]);
@@ -48,6 +49,7 @@ co.spawn(function *() {
   }
 
   node.startSync();
-}).catch(function(err) {
-  throw err;
+})().catch((err) => {
+  console.error(err.stack);
+  process.exit(1);
 });

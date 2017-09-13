@@ -17,6 +17,10 @@ var items = [];
 var scrollback = 0;
 var logger, node, wdb;
 
+window.onunhandledrejection = function(event) {
+  throw event.reason;
+};
+
 body.onmouseup = function() {
   floating.style.display = 'none';
 };
@@ -230,14 +234,12 @@ node = new bcoin.fullnode({
   db: 'leveldb',
   coinCache: 30000000,
   logConsole: true,
+  workers: true,
+  workerFile: '/bcoin-worker.js',
   logger: logger
 });
 
-wdb = node.use(bcoin.walletplugin);
-
-node.on('error', function(err) {
-  ;
-});
+wdb = node.use(bcoin.wallet.plugin);
 
 node.chain.on('block', addItem);
 node.mempool.on('tx', addItem);

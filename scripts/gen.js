@@ -1,115 +1,107 @@
 'use strict';
 
-var BN = require('bn.js');
-var util = require('../lib/utils/util');
-var consensus = require('../lib/protocol/consensus');
-var encoding = require('../lib/utils/encoding');
-var TX = require('../lib/primitives/tx');
-var Block = require('../lib/primitives/block');
-var Script = require('../lib/script/script');
-var Opcode = require('../lib/script/opcode');
-var opcodes = Script.opcodes;
-var main, testnet, regtest, segnet3, segnet4, btcd;
+const util = require('../lib/utils/util');
+const consensus = require('../lib/protocol/consensus');
+const encoding = require('../lib/utils/encoding');
+const TX = require('../lib/primitives/tx');
+const Block = require('../lib/primitives/block');
+const Script = require('../lib/script/script');
 
 function createGenesisBlock(options) {
-  var flags = options.flags;
-  var script = options.script;
-  var reward = options.reward;
-  var tx, block;
+  let flags = options.flags;
+  let key = options.key;
+  let reward = options.reward;
 
   if (!flags) {
-    flags = new Buffer(
+    flags = Buffer.from(
       'The Times 03/Jan/2009 Chancellor on brink of second bailout for banks',
       'ascii');
   }
 
-  if (!script) {
-    script = Script.fromArray([
-      new Buffer('04678afdb0fe5548271967f1a67130b7105cd6a828e039'
-        + '09a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c3'
-        + '84df7ba0b8d578a4c702b6bf11d5f', 'hex'),
-      opcodes.OP_CHECKSIG
-    ]);
+  if (!key) {
+    key = Buffer.from(''
+      + '04678afdb0fe5548271967f1a67130b7105cd6a828e039'
+      + '09a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c3'
+      + '84df7ba0b8d578a4c702b6bf11d5f', 'hex');
   }
 
   if (!reward)
     reward = 50 * consensus.COIN;
 
-  tx = new TX({
+  const tx = new TX({
     version: 1,
-    flag: 1,
     inputs: [{
       prevout: {
         hash: encoding.NULL_HASH,
         index: 0xffffffff
       },
-      script: [
-        Opcode.fromNumber(new BN(486604799)),
-        Opcode.fromPush(new Buffer([4])),
-        Opcode.fromData(flags)
-      ],
+      script: Script()
+        .pushInt(486604799)
+        .pushPush(Buffer.from([4]))
+        .pushData(flags)
+        .compile(),
       sequence: 0xffffffff
     }],
     outputs: [{
       value: reward,
-      script: script
+      script: Script.fromPubkey(key)
     }],
     locktime: 0
   });
 
-  block = new Block({
+  const block = new Block({
     version: options.version,
     prevBlock: encoding.NULL_HASH,
     merkleRoot: tx.hash('hex'),
-    ts: options.ts,
+    time: options.time,
     bits: options.bits,
     nonce: options.nonce,
     height: 0
   });
 
-  block.addTX(tx);
+  block.txs.push(tx);
 
   return block;
 }
 
-main = createGenesisBlock({
+const main = createGenesisBlock({
   version: 1,
-  ts: 1231006505,
+  time: 1231006505,
   bits: 486604799,
   nonce: 2083236893
 });
 
-testnet = createGenesisBlock({
+const testnet = createGenesisBlock({
   version: 1,
-  ts: 1296688602,
+  time: 1296688602,
   bits: 486604799,
   nonce: 414098458
 });
 
-regtest = createGenesisBlock({
+const regtest = createGenesisBlock({
   version: 1,
-  ts: 1296688602,
+  time: 1296688602,
   bits: 545259519,
   nonce: 2
 });
 
-segnet3 = createGenesisBlock({
+const segnet3 = createGenesisBlock({
   version: 1,
-  ts: 1452831101,
+  time: 1452831101,
   bits: 486604799,
   nonce: 0
 });
 
-segnet4 = createGenesisBlock({
+const segnet4 = createGenesisBlock({
   version: 1,
-  ts: 1452831101,
+  time: 1452831101,
   bits: 503447551,
   nonce: 0
 });
 
-btcd = createGenesisBlock({
+const btcd = createGenesisBlock({
   version: 1,
-  ts: 1401292357,
+  time: 1401292357,
   bits: 545259519,
   nonce: 2
 });

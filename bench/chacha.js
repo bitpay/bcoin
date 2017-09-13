@@ -1,49 +1,56 @@
 'use strict';
 
-var chachapoly = require('../lib/crypto/chachapoly');
-var crypto = require('../lib/crypto/crypto');
-var bench = require('./bench');
-var i, chacha, iv, poly, key, data, end;
+const ChaCha20 = require('../lib/crypto/chacha20');
+const Poly1305 = require('../lib/crypto/poly1305');
+const digest = require('../lib/crypto/digest');
+const bench = require('./bench');
 
 console.log('note: rate measured in kb/s');
 
-chacha = new chachapoly.ChaCha20();
-key = new Buffer(32);
-key.fill(2);
-iv = new Buffer('0102030405060708', 'hex');
-chacha.init(key, iv, 0);
-data = new Buffer(32);
-for (i = 0; i < 32; i++)
-  data[i] = i;
-end = bench('encrypt');
-for (i = 0; i < 1000000; i++)
-  chacha.encrypt(data);
-end(i * 32 / 1024);
+const chacha = new ChaCha20();
+const poly = new Poly1305();
+const key = Buffer.alloc(32, 0x02);
+const iv = Buffer.from('0102030405060708', 'hex');
+const chunk = Buffer.allocUnsafe(32);
+const data = Buffer.allocUnsafe(32);
 
-poly = new chachapoly.Poly1305();
-key = new Buffer(32);
-key.fill(2);
-poly.init(key);
+for (let i = 0; i < 32; i++)
+  chunk[i] = i;
 
-data = new Buffer(32);
-for (i = 0; i < 32; i++)
+for (let i = 0; i < 32; i++)
   data[i] = i & 0xff;
 
-end = bench('update');
-for (i = 0; i < 1000000; i++)
-  poly.update(data);
-end(i * 32 / 1024);
+chacha.init(key, iv, 0);
+poly.init(key);
 
-end = bench('finish');
-for (i = 0; i < 1000000; i++) {
-  poly.init(key);
-  poly.update(data);
-  poly.finish();
+{
+  const end = bench('encrypt');
+  for (let i = 0; i < 1000000; i++)
+    chacha.encrypt(chunk);
+  end(1000000 * 32 / 1024);
 }
-end(i * 32 / 1024);
+
+{
+  const end = bench('update');
+  for (let i = 0; i < 1000000; i++)
+    poly.update(data);
+  end(1000000 * 32 / 1024);
+}
+
+{
+  const end = bench('finish');
+  for (let i = 0; i < 1000000; i++) {
+    poly.init(key);
+    poly.update(data);
+    poly.finish();
+  }
+  end(1000000 * 32 / 1024);
+}
 
 // For reference:
-end = bench('sha256');
-for (i = 0; i < 1000000; i++)
-  crypto.hash256(data);
-end(i * 32 / 1024);
+{
+  const end = bench('sha256');
+  for (let i = 0; i < 1000000; i++)
+    digest.hash256(data);
+  end(1000000 * 32 / 1024);
+}

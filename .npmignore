@@ -1,9 +1,9 @@
 .git*
 bench/
 docs/
+docker_data/
 test/
 node_modules/
 browser/bcoin*
-.jshintrc
-.jscsrc
-jsdoc.json
+package-lock.json
+npm-debug.log

@@ -1,139 +1,103 @@
+/* eslint-env mocha */
+/* eslint prefer-arrow-callback: "off" */
+
 'use strict';
 
-var assert = require('assert');
-var util = require('../lib/utils/util');
-var encoding = require('../lib/utils/encoding');
-var crypto = require('../lib/crypto/crypto');
-var consensus = require('../lib/protocol/consensus');
-var Network = require('../lib/protocol/network');
-var TX = require('../lib/primitives/tx');
-var Block = require('../lib/primitives/block');
-var Coin = require('../lib/primitives/coin');
-var Output = require('../lib/primitives/output');
-var Script = require('../lib/script/script');
-var Witness = require('../lib/script/witness');
-var Input = require('../lib/primitives/input');
-var Outpoint = require('../lib/primitives/outpoint');
-var CoinView = require('../lib/coins/coinview');
-var Coins = require('../lib/coins/coins');
-var UndoCoins = require('../lib/coins/undocoins');
-var StaticWriter = require('../lib/utils/staticwriter');
-var BufferReader = require('../lib/utils/reader');
-var KeyRing = require('../lib/primitives/keyring');
-var parseTX = require('./util/common').parseTX;
-var opcodes = Script.opcodes;
+const assert = require('./util/assert');
+const Output = require('../lib/primitives/output');
+const Input = require('../lib/primitives/input');
+const Outpoint = require('../lib/primitives/outpoint');
+const CoinView = require('../lib/coins/coinview');
+const CoinEntry = require('../lib/coins/coinentry');
+const StaticWriter = require('../lib/utils/staticwriter');
+const BufferReader = require('../lib/utils/reader');
+const common = require('./util/common');
 
-var data = parseTX('data/tx1.hex');
-var tx1 = data.tx;
+const tx1 = common.readTX('tx1');
 
-function collect(coins) {
-  var outputs = [];
-  var i;
-
-  for (i = 0; i < coins.outputs.length; i++) {
-    if (!coins.isUnspent(i))
-      continue;
-    outputs.push(coins.getOutput(i));
-  }
-
-  return outputs;
-}
-
-function reserialize(coins) {
-  var raw = coins.toRaw();
-  return Coins.fromRaw(raw);
+function reserialize(coin) {
+  const raw = coin.toRaw();
+  const entry = CoinEntry.fromRaw(raw);
+  entry.raw = null;
+  return CoinEntry.fromRaw(entry.toRaw());
 }
 
 function deepCoinsEqual(a, b) {
-  assert(a.outputs.length > 0);
-  assert(b.outputs.length > 0);
-
   assert.strictEqual(a.version, b.version);
   assert.strictEqual(a.height, b.height);
   assert.strictEqual(a.coinbase, b.coinbase);
-  assert.strictEqual(a.length(), b.length());
-  assert.deepStrictEqual(collect(a), collect(b));
+  assert.bufferEqual(a.raw, b.raw);
 }
 
 describe('Coins', function() {
-  it('should instantiate coinview from tx', function() {
-    var hash = tx1.hash('hex');
-    var view = new CoinView();
-    var prevout = new Outpoint(hash, 0);
-    var input = Input.fromOutpoint(prevout);
-    var coins, entry, output;
+  it('should instantiate coinview from tx', () => {
+    const [tx] = tx1.getTX();
+    const hash = tx.hash('hex');
+    const view = new CoinView();
+    const prevout = new Outpoint(hash, 0);
+    const input = Input.fromOutpoint(prevout);
 
-    view.addTX(tx1, 1);
+    view.addTX(tx, 1);
 
-    coins = view.get(hash);
+    const coins = view.get(hash);
+    assert.strictEqual(coins.outputs.size, tx.outputs.length);
 
-    assert.equal(coins.version, 1);
-    assert.equal(coins.height, 1);
-    assert.equal(coins.coinbase, false);
-    assert.equal(coins.outputs.length, tx1.outputs.length);
-
-    entry = coins.get(0);
+    const entry = coins.get(0);
     assert(entry);
-    assert(!entry.spent);
 
-    assert.equal(entry.offset, 0);
-    assert.equal(entry.size, 0);
-    assert.equal(entry.raw, null);
-    assert(entry.output instanceof Output);
-    assert.equal(entry.spent, false);
+    assert.strictEqual(entry.version, 1);
+    assert.strictEqual(entry.height, 1);
+    assert.strictEqual(entry.coinbase, false);
+    assert.strictEqual(entry.raw, null);
+    assert.instanceOf(entry.output, Output);
+    assert.strictEqual(entry.spent, false);
 
-    output = view.getOutput(input);
+    const output = view.getOutputFor(input);
     assert(output);
 
-    deepCoinsEqual(coins, reserialize(coins));
+    deepCoinsEqual(entry, reserialize(entry));
   });
 
-  it('should spend an output', function() {
-    var hash = tx1.hash('hex');
-    var view = new CoinView();
-    var coins, entry, length;
+  it('should spend an output', () => {
+    const [tx] = tx1.getTX();
+    const hash = tx.hash('hex');
+    const view = new CoinView();
 
-    view.addTX(tx1, 1);
+    view.addTX(tx, 1);
 
-    coins = view.get(hash);
-    assert(coins);
-    length = coins.length();
-
-    view.spendOutput(hash, 0);
-
-    coins = view.get(hash);
+    const coins = view.get(hash);
     assert(coins);
 
-    entry = coins.get(0);
+    const length = coins.outputs.size;
+
+    view.spendEntry(new Outpoint(hash, 0));
+
+    assert.strictEqual(view.get(hash), coins);
+
+    const entry = coins.get(0);
     assert(entry);
     assert(entry.spent);
 
-    deepCoinsEqual(coins, reserialize(coins));
-    assert.strictEqual(coins.length(), length);
+    deepCoinsEqual(entry, reserialize(entry));
+    assert.strictEqual(coins.outputs.size, length);
 
-    assert.equal(view.undo.items.length, 1);
+    assert.strictEqual(view.undo.items.length, 1);
   });
 
-  it('should handle coin view', function() {
-    var hash = tx1.hash('hex');
-    var view = new CoinView();
-    var i, tx, size, bw, br;
-    var raw, res, prev, coins;
+  it('should handle coin view', () => {
+    const [tx, view] = tx1.getTX();
 
-    for (i = 1; i < data.txs.length; i++) {
-      tx = data.txs[i];
-      view.addTX(tx, 1);
-    }
+    const size = view.getSize(tx);
+    const bw = new StaticWriter(size);
+    const raw = view.toWriter(bw, tx).render();
+    const br = new BufferReader(raw);
+    const res = CoinView.fromReader(br, tx);
 
-    size = view.getFastSize(tx1);
-    bw = new StaticWriter(size);
-    raw = view.toFast(bw, tx1).render();
-    br = new BufferReader(raw);
-    res = CoinView.fromFast(br, tx1);
+    const prev = tx.inputs[0].prevout;
+    const coins = res.get(prev.hash);
 
-    prev = tx1.inputs[0].prevout;
-    coins = res.get(prev.hash);
-
-    assert.deepStrictEqual(coins.get(0), reserialize(coins).get(0));
+    assert.strictEqual(coins.outputs.size, 1);
+    assert.strictEqual(coins.get(0), null);
+    deepCoinsEqual(coins.get(1), reserialize(coins.get(1)));
   });
 });

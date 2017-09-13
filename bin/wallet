@@ -4,9 +4,9 @@
 
 process.title = 'bcoin-wallet';
 
-var server = require('../lib/wallet/server');
+const server = require('../lib/wallet/server');
 
-var wdb = server.create({
+const wdb = server.create({
   config: true,
   argv: true,
   env: true,
@@ -16,10 +16,10 @@ var wdb = server.create({
   db: 'leveldb'
 });
 
-wdb.on('error', function(err) {
-  ;
+process.on('unhandledRejection', (err, promise) => {
+  throw err;
 });
 
-wdb.open().catch(function(err) {
+wdb.open().catch((err) => {
   throw err;
 });

@@ -4,18 +4,18 @@
  * https://github.com/bcoin-org/bcoin
  */
 
+/* eslint-disable */
+
 'use strict';
 
-var assert = require('assert');
-var util = require('../lib/utils/util');
-var encoding = require('../lib/utils/encoding');
-var Coin = require('../lib/primitives/coin');
-var Output = require('../lib/primitives/output');
-var BufferReader = require('../lib/utils/reader');
-var BufferWriter = require('../lib/utils/writer');
-var compressor = require('./compress-old');
-var compress = compressor.compress;
-var decompress = compressor.decompress;
+const assert = require('assert');
+const util = require('../lib/utils/util');
+const encoding = require('../lib/utils/encoding');
+const Coin = require('../lib/primitives/coin');
+const Output = require('../lib/primitives/output');
+const BufferReader = require('../lib/utils/reader');
+const BufferWriter = require('../lib/utils/writer');
+const {compress, decompress} = require('./compress-old');
 
 /**
  * Represents the outputs for a single transaction.
@@ -52,7 +52,7 @@ function Coins(options) {
 
 Coins.prototype.fromOptions = function fromOptions(options) {
   if (options.version != null) {
-    assert(util.isNumber(options.version));
+    assert(util.isU32(options.version));
     this.version = options.version;
   }
 
@@ -62,7 +62,7 @@ Coins.prototype.fromOptions = function fromOptions(options) {
   }
 
   if (options.height != null) {
-    assert(util.isNumber(options.height));
+    assert(util.isInt(options.height));
     this.height = options.height;
   }
 
@@ -133,12 +133,10 @@ Coins.prototype.has = function has(index) {
  */
 
 Coins.prototype.get = function get(index) {
-  var coin;
-
   if (index >= this.outputs.length)
     return;
 
-  coin = this.outputs[index];
+  const coin = this.outputs[index];
 
   if (!coin)
     return;
@@ -153,7 +151,7 @@ Coins.prototype.get = function get(index) {
  */
 
 Coins.prototype.spend = function spend(index) {
-  var coin = this.get(index);
+  const coin = this.get(index);
 
   if (!coin)
     return;
@@ -169,11 +167,10 @@ Coins.prototype.spend = function spend(index) {
  */
 
 Coins.prototype.size = function size() {
-  var index = -1;
-  var i, output;
+  let index = -1;
 
-  for (i = this.outputs.length - 1; i >= 0; i--) {
-    output = this.outputs[i];
+  for (let i = this.outputs.length - 1; i >= 0; i--) {
+    const output = this.outputs[i];
     if (output) {
       index = i;
       break;
@@ -223,10 +220,9 @@ Coins.prototype.isEmpty = function isEmpty() {
  */
 
 Coins.prototype.toRaw = function toRaw() {
-  var bw = new BufferWriter();
-  var length = this.size();
-  var len = Math.ceil(length / 8);
-  var i, output, bits, start, bit, oct, data;
+  const bw = new BufferWriter();
+  const length = this.size();
+  const len = Math.ceil(length / 8);
 
   // Return nothing if we're fully spent.
   if (length === 0)
@@ -238,7 +234,7 @@ Coins.prototype.toRaw = function toRaw() {
 
   // Create the `bits` value:
   // (height | coinbase-flag).
-  bits = this.height << 1;
+  let bits = this.height << 1;
 
   // Append the coinbase bit.
   if (this.coinbase)
@@ -261,12 +257,12 @@ Coins.prototype.toRaw = function toRaw() {
   // allocating a buffer. We mark the spents
   // after rendering the final buffer.
   bw.writeVarint(len);
-  start = bw.written;
+  const start = bw.offset;
   bw.fill(0, len);
 
   // Write the compressed outputs.
-  for (i = 0; i < length; i++) {
-    output = this.outputs[i];
+  for (let i = 0; i < length; i++) {
+    const output = this.outputs[i];
 
     if (!output)
       continue;
@@ -276,18 +272,18 @@ Coins.prototype.toRaw = function toRaw() {
 
   // Render the buffer with all
   // zeroes in the spent field.
-  data = bw.render();
+  const data = bw.render();
 
   // Mark the spents in the spent field.
   // This is essentially a NOP for new coins.
-  for (i = 0; i < length; i++) {
-    output = this.outputs[i];
+  for (let i = 0; i < length; i++) {
+    const output = this.outputs[i];
 
     if (output)
       continue;
 
-    bit = i % 8;
-    oct = (i - bit) / 8;
+    const bit = i % 8;
+    let oct = (i - bit) / 8;
     oct += start;
 
     data[oct] |= 1 << (7 - bit);
@@ -304,13 +300,12 @@ Coins.prototype.toRaw = function toRaw() {
  */
 
 Coins.prototype.fromRaw = function fromRaw(data, hash, index) {
-  var br = new BufferReader(data);
-  var pos = 0;
-  var bits, len, start, bit, oct, spent, coin;
+  const br = new BufferReader(data);
+  let pos = 0;
 
   this.version = br.readVarint();
 
-  bits = br.readU32();
+  const bits = br.readU32();
 
   this.height = bits >>> 1;
   this.hash = hash;
@@ -318,17 +313,17 @@ Coins.prototype.fromRaw = function fromRaw(data, hash, index) {
 
   // Mark the start of the spent field and
   // seek past it to avoid reading a buffer.
-  len = br.readVarint();
-  start = br.offset;
+  const len = br.readVarint();
+  const start = br.offset;
   br.seek(len);
 
   while (br.left()) {
-    bit = pos % 8;
-    oct = (pos - bit) / 8;
+    const bit = pos % 8;
+    let oct = (pos - bit) / 8;
     oct += start;
 
     // Read a single bit out of the spent field.
-    spent = data[oct] >>> (7 - bit);
+    let spent = data[oct] >>> (7 - bit);
     spent &= 1;
 
     // Already spent.
@@ -340,7 +335,7 @@ Coins.prototype.fromRaw = function fromRaw(data, hash, index) {
 
     // Store the offset and size
     // in the compressed coin object.
-    coin = CoinEntry.fromReader(br);
+    const coin = CoinEntry.fromReader(br);
 
     this.outputs.push(coin);
     pos++;
@@ -358,14 +353,13 @@ Coins.prototype.fromRaw = function fromRaw(data, hash, index) {
  */
 
 Coins.parseCoin = function parseCoin(data, hash, index) {
-  var br = new BufferReader(data);
-  var coin = new Coin();
-  var pos = 0;
-  var bits, len, start, bit, oct, spent;
+  const br = new BufferReader(data);
+  const coin = new Coin();
+  let pos = 0;
 
   coin.version = br.readVarint();
 
-  bits = br.readU32();
+  const bits = br.readU32();
 
   coin.hash = hash;
   coin.index = index;
@@ -375,17 +369,17 @@ Coins.parseCoin = function parseCoin(data, hash, index) {
 
   // Mark the start of the spent field and
   // seek past it to avoid reading a buffer.
-  len = br.readVarint();
-  start = br.offset;
+  const len = br.readVarint();
+  const start = br.offset;
   br.seek(len);
 
   while (br.left()) {
-    bit = pos % 8;
-    oct = (pos - bit) / 8;
+    const bit = pos % 8;
+    let oct = (pos - bit) / 8;
     oct += start;
 
     // Read a single bit out of the spent field.
-    spent = data[oct] >>> (7 - bit);
+    let spent = data[oct] >>> (7 - bit);
     spent &= 1;
 
     // We found our coin.
@@ -427,15 +421,13 @@ Coins.fromRaw = function fromRaw(data, hash) {
  */
 
 Coins.prototype.fromTX = function fromTX(tx) {
-  var i, output;
-
   this.version = tx.version;
   this.hash = tx.hash('hex');
   this.height = tx.height;
   this.coinbase = tx.isCoinbase();
 
-  for (i = 0; i < tx.outputs.length; i++) {
-    output = tx.outputs[i];
+  for (let i = 0; i < tx.outputs.length; i++) {
+    const output = tx.outputs[i];
 
     if (output.script.isUnspendable()) {
       this.outputs.push(null);
@@ -492,8 +484,7 @@ function CoinEntry() {
  */
 
 CoinEntry.prototype.toCoin = function toCoin(coins, index) {
-  var coin = new Coin();
-  var br;
+  const coin = new Coin();
 
   // Load in all necessary properties
   // from the parent Coins object.
@@ -509,7 +500,7 @@ CoinEntry.prototype.toCoin = function toCoin(coins, index) {
     return coin;
   }
 
-  br = new BufferReader(this.raw);
+  const br = new BufferReader(this.raw);
 
   // Seek to the coin's offset.
   br.seek(this.offset);
@@ -527,8 +518,6 @@ CoinEntry.prototype.toCoin = function toCoin(coins, index) {
  */
 
 CoinEntry.prototype.toWriter = function toWriter(bw) {
-  var raw;
-
   if (this.output) {
     compress.script(this.output.script, bw);
     bw.writeVarint(this.output.value);
@@ -541,7 +530,7 @@ CoinEntry.prototype.toWriter = function toWriter(bw) {
   // didn't use it, it's still in its
   // compressed form. Just write it back
   // as a buffer for speed.
-  raw = this.raw.slice(this.offset, this.offset + this.size);
+  const raw = this.raw.slice(this.offset, this.offset + this.size);
 
   bw.writeBytes(raw);
 };
@@ -553,7 +542,7 @@ CoinEntry.prototype.toWriter = function toWriter(bw) {
  */
 
 CoinEntry.fromReader = function fromReader(br) {
-  var entry = new CoinEntry();
+  const entry = new CoinEntry();
   entry.offset = br.offset;
   entry.size = skipCoin(br);
   entry.raw = br.data;
@@ -568,7 +557,7 @@ CoinEntry.fromReader = function fromReader(br) {
  */
 
 CoinEntry.fromTX = function fromTX(tx, index) {
-  var entry = new CoinEntry();
+  const entry = new CoinEntry();
   entry.output = tx.outputs[index];
   return entry;
 };
@@ -580,7 +569,7 @@ CoinEntry.fromTX = function fromTX(tx, index) {
  */
 
 CoinEntry.fromCoin = function fromCoin(coin) {
-  var entry = new CoinEntry();
+  const entry = new CoinEntry();
   entry.output = new Output();
   entry.output.script = coin.script;
   entry.output.value = coin.value;
@@ -592,7 +581,7 @@ CoinEntry.fromCoin = function fromCoin(coin) {
  */
 
 function skipCoin(br) {
-  var start = br.offset;
+  const start = br.offset;
 
   // Skip past the compressed scripts.
   switch (br.readU8()) {

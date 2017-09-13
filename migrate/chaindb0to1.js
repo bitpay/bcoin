@@ -1,14 +1,15 @@
-var bcoin = require('../');
-var co = bcoin.co;
-var assert = require('assert');
-var file = process.argv[2];
-var BufferWriter = require('../lib/utils/writer');
+'use strict';
+
+const bcoin = require('../');
+const assert = require('assert');
+const BufferWriter = require('../lib/utils/writer');
+let file = process.argv[2];
 
 assert(typeof file === 'string', 'Please pass in a database path.');
 
 file = file.replace(/\.ldb\/?$/, '');
 
-var db = bcoin.ldb({
+const db = bcoin.ldb({
   location: file,
   db: 'leveldb',
   compression: true,
@@ -18,77 +19,72 @@ var db = bcoin.ldb({
 });
 
 function makeKey(data) {
-  var height = data.readUInt32LE(1, true);
-  var key = new Buffer(5);
+  const height = data.readUInt32LE(1, true);
+  const key = Buffer.allocUnsafe(5);
   key[0] = 0x48;
   key.writeUInt32BE(height, 1, true);
   return key;
 }
 
-var checkVersion = co(function* checkVersion() {
-  var data, ver;
-
+async function checkVersion() {
   console.log('Checking version.');
 
-  data = yield db.get('V');
+  const data = await db.get('V');
 
   if (!data)
     return;
 
-  ver = data.readUInt32LE(0, true);
+  const ver = data.readUInt32LE(0, true);
 
   if (ver !== 0)
-    throw Error('DB is version ' + ver + '.');
-});
+    throw Error(`DB is version ${ver}.`);
+}
 
-var updateState = co(function* updateState() {
-  var data, hash, batch, ver, p;
-
+async function updateState() {
   console.log('Updating chain state.');
 
-  data = yield db.get('R');
+  const data = await db.get('R');
 
   if (!data || data.length < 32)
     throw new Error('No chain state.');
 
-  hash = data.slice(0, 32);
+  const hash = data.slice(0, 32);
 
-  p = new BufferWriter();
+  let p = new BufferWriter();
   p.writeHash(hash);
   p.writeU64(0);
   p.writeU64(0);
   p.writeU64(0);
   p = p.render();
 
-  batch = db.batch();
+  const batch = db.batch();
 
   batch.put('R', p);
 
-  ver = new Buffer(4);
+  const ver = Buffer.allocUnsafe(4);
   ver.writeUInt32LE(1, 0, true);
   batch.put('V', ver);
 
-  yield batch.write();
+  await batch.write();
 
   console.log('Updated chain state.');
-});
+}
 
-var updateEndian = co(function* updateEndian() {
-  var batch = db.batch();
-  var total = 0;
-  var iter, item;
+async function updateEndian() {
+  const batch = db.batch();
+  let total = 0;
 
   console.log('Updating endianness.');
   console.log('Iterating...');
 
-  iter = db.iterator({
-    gte: new Buffer('4800000000', 'hex'),
-    lte: new Buffer('48ffffffff', 'hex'),
+  const iter = db.iterator({
+    gte: Buffer.from('4800000000', 'hex'),
+    lte: Buffer.from('48ffffffff', 'hex'),
     values: true
   });
 
   for (;;) {
-    item = yield iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;
@@ -100,18 +96,18 @@ var updateEndian = co(function* updateEndian() {
 
   console.log('Migrating %d items.', total);
 
-  yield batch.write();
+  await batch.write();
 
   console.log('Migrated endianness.');
-});
+}
 
-co.spawn(function* () {
-  yield db.open();
+(async () => {
+  await db.open();
   console.log('Opened %s.', file);
-  yield checkVersion();
-  yield updateState();
-  yield updateEndian();
-}).then(function() {
+  await checkVersion();
+  await updateState();
+  await updateEndian();
+})().then(() => {
   console.log('Migration complete.');
   process.exit(0);
 });

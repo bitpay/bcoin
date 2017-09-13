@@ -6,8 +6,8 @@
 
 'use strict';
 
-var assert = require('assert');
-var ec = require('../lib/crypto/ec');
+const assert = require('assert');
+const secp256k1 = require('../lib/crypto/secp256k1');
 
 /*
  * Compression
@@ -20,8 +20,6 @@ var ec = require('../lib/crypto/ec');
  */
 
 function compressScript(script, bw) {
-  var data;
-
   // Attempt to compress the output scripts.
   // We can _only_ ever compress them if
   // they are serialized as minimaldata, as
@@ -31,7 +29,7 @@ function compressScript(script, bw) {
   // P2PKH -> 1 | key-hash
   // Saves 5 bytes.
   if (script.isPubkeyhash(true)) {
-    data = script.code[2].data;
+    const data = script.code[2].data;
     bw.writeU8(1);
     bw.writeBytes(data);
     return bw;
@@ -40,7 +38,7 @@ function compressScript(script, bw) {
   // P2SH -> 2 | script-hash
   // Saves 3 bytes.
   if (script.isScripthash()) {
-    data = script.code[1].data;
+    const data = script.code[1].data;
     bw.writeU8(2);
     bw.writeBytes(data);
     return bw;
@@ -50,8 +48,8 @@ function compressScript(script, bw) {
   // Only works if the key is valid.
   // Saves up to 34 bytes.
   if (script.isPubkey(true)) {
-    data = script.code[0].data;
-    if (ec.publicKeyVerify(data)) {
+    let data = script.code[0].data;
+    if (secp256k1.publicKeyVerify(data)) {
       data = compressKey(data);
       bw.writeU8(3);
       bw.writeBytes(data);
@@ -73,7 +71,7 @@ function compressScript(script, bw) {
  */
 
 function decompressScript(script, br) {
-  var data;
+  let data;
 
   // Decompress the script.
   switch (br.readU8()) {
@@ -112,19 +110,17 @@ function decompressScript(script, br) {
  */
 
 function compressValue(value) {
-  var exp, last;
-
   if (value === 0)
     return 0;
 
-  exp = 0;
+  let exp = 0;
   while (value % 10 === 0 && exp < 9) {
     value /= 10;
     exp++;
   }
 
   if (exp < 9) {
-    last = value % 10;
+    const last = value % 10;
     value = (value - last) / 10;
     return 1 + 10 * (9 * value + last - 1) + exp;
   }
@@ -139,18 +135,17 @@ function compressValue(value) {
  */
 
 function decompressValue(value) {
-  var exp, n, last;
-
   if (value === 0)
     return 0;
 
   value--;
 
-  exp = value % 10;
+  let exp = value % 10;
   value = (value - exp) / 10;
 
+  let n;
   if (exp < 9) {
-    last = value % 9;
+    const last = value % 9;
     value = (value - last) / 9;
     n = value * 10 + last + 1;
   } else {
@@ -172,7 +167,7 @@ function decompressValue(value) {
  */
 
 function compressKey(key) {
-  var out;
+  let out;
 
   switch (key[0]) {
     case 0x02:
@@ -184,7 +179,7 @@ function compressKey(key) {
     case 0x06:
     case 0x07:
       // Compress the key normally.
-      out = ec.publicKeyConvert(key, true);
+      out = secp256k1.publicKeyConvert(key, true);
       // Store the original format (which
       // may be a hybrid byte) in the hi
       // 3 bits so we can restore it later.
@@ -209,8 +204,7 @@ function compressKey(key) {
  */
 
 function decompressKey(key) {
-  var format = key[0] >>> 2;
-  var out;
+  const format = key[0] >>> 2;
 
   assert(key.length === 33);
 
@@ -223,7 +217,7 @@ function decompressKey(key) {
   // low bits so publicKeyConvert
   // actually understands it.
   key[0] &= 0x03;
-  out = ec.publicKeyConvert(key, false);
+  const out = secp256k1.publicKeyConvert(key, false);
 
   // Reset the hi bits so as not to
   // mutate the original buffer.

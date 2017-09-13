@@ -1,7 +1,6 @@
-npm-debug.log
-key.key
 node_modules/
-test.js
+docs/reference/
 docker_data/
-docs/
 browser/bcoin*
+package-lock.json
+npm-debug.log

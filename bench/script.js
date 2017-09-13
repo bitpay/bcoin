@@ -1,37 +1,17 @@
 'use strict';
 
-var assert = require('assert');
-var crypto = require('../lib/crypto/crypto');
-var Script = require('../lib/script/script');
-var bench = require('./bench');
-var opcodes = Script.opcodes;
-var i, hashes, end;
+const random = require('../lib/crypto/random');
+const Script = require('../lib/script/script');
+const bench = require('./bench');
 
-Script.prototype.fromPubkeyhashOld = function fromScripthash(hash) {
-  assert(Buffer.isBuffer(hash) && hash.length === 20);
-  this.push(opcodes.OP_DUP);
-  this.push(opcodes.OP_HASH160);
-  this.push(hash);
-  this.push(opcodes.OP_EQUALVERIFY);
-  this.push(opcodes.OP_CHECKSIG);
-  this.compile();
-  return this;
-};
+const hashes = [];
 
-Script.fromPubkeyhashOld = function fromScripthash(hash) {
-  return new Script().fromPubkeyhashOld(hash);
-};
+for (let i = 0; i < 100000; i++)
+  hashes.push(random.randomBytes(20));
 
-hashes = [];
-for (i = 0; i < 100000; i++)
-  hashes.push(crypto.randomBytes(20));
-
-end = bench('old');
-for (i = 0; i < hashes.length; i++)
-  Script.fromPubkeyhashOld(hashes[i]);
-end(i);
-
-end = bench('hash');
-for (i = 0; i < hashes.length; i++)
-  Script.fromPubkeyhash(hashes[i]);
-end(i);
+{
+  const end = bench('hash');
+  for (let i = 0; i < hashes.length; i++)
+    Script.fromPubkeyhash(hashes[i]);
+  end(100000);
+}

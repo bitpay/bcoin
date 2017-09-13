@@ -13,18 +13,15 @@ if (process.argv.indexOf('--help') !== -1
 
 if (process.argv.indexOf('--version') !== -1
     || process.argv.indexOf('-v') !== -1) {
-  var pkg = require('../package.json');
+  const pkg = require('../package.json');
   console.log(pkg.version);
   process.exit(0);
   throw new Error('Could not exit.');
 }
 
-var bcoin = require('../');
-var plugin = require('../lib/wallet/plugin');
-var co = bcoin.co;
-var node;
+const FullNode = require('../lib/node/fullnode');
 
-node = new bcoin.fullnode({
+const node = new FullNode({
   config: true,
   argv: true,
   env: true,
@@ -33,23 +30,27 @@ node = new bcoin.fullnode({
   logLevel: 'debug',
   db: 'leveldb',
   persistent: true,
+  workers: true,
   listen: true,
   loader: require
 });
 
 // Temporary hack
-if (!node.config.bool('no-wallet') && !node.has('walletdb'))
+if (!node.config.bool('no-wallet') && !node.has('walletdb')) {
+  const plugin = require('../lib/wallet/plugin');
   node.use(plugin);
+}
 
-node.on('error', function(err) {
-  ;
+process.on('unhandledRejection', (err, promise) => {
+  throw err;
 });
 
-co.spawn(function *() {
-  yield node.ensure();
-  yield node.open();
-  yield node.connect();
+(async () => {
+  await node.ensure();
+  await node.open();
+  await node.connect();
   node.startSync();
-}).catch(function(err) {
-  throw err;
+})().catch((err) => {
+  console.error(err.stack);
+  process.exit(1);
 });

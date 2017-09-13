@@ -4,10 +4,12 @@
  * https://github.com/bcoin-org/bcoin
  */
 
+/* eslint-disable */
+
 'use strict';
 
-var assert = require('assert');
-var Coins = require('./coins-old');
+const assert = require('assert');
+const Coins = require('./coins-old');
 
 /**
  * A collections of {@link Coins} objects.
@@ -62,7 +64,7 @@ CoinView.prototype.addTX = function addTX(tx) {
  */
 
 CoinView.prototype.get = function get(hash, index) {
-  var coins = this.coins[hash];
+  const coins = this.coins[hash];
 
   if (!coins)
     return;
@@ -78,7 +80,7 @@ CoinView.prototype.get = function get(hash, index) {
  */
 
 CoinView.prototype.has = function has(hash, index) {
-  var coins = this.coins[hash];
+  const coins = this.coins[hash];
 
   if (!coins)
     return false;
@@ -94,7 +96,7 @@ CoinView.prototype.has = function has(hash, index) {
  */
 
 CoinView.prototype.spend = function spend(hash, index) {
-  var coins = this.coins[hash];
+  const coins = this.coins[hash];
 
   if (!coins)
     return;
@@ -109,7 +111,7 @@ CoinView.prototype.spend = function spend(hash, index) {
  */
 
 CoinView.prototype.fillCoins = function fillCoins(tx) {
-  var i, input, prevout;
+  let i, input, prevout;
 
   for (i = 0; i < tx.inputs.length; i++) {
     input = tx.inputs[i];
@@ -128,9 +130,9 @@ CoinView.prototype.fillCoins = function fillCoins(tx) {
  */
 
 CoinView.prototype.toArray = function toArray() {
-  var keys = Object.keys(this.coins);
-  var out = [];
-  var i, hash;
+  const keys = Object.keys(this.coins);
+  const out = [];
+  let i, hash;
 
   for (i = 0; i < keys.length; i++) {
     hash = keys[i];

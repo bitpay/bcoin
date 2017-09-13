@@ -1,118 +1,140 @@
+/* eslint-env mocha */
+/* eslint prefer-arrow-callback: "off" */
+
 'use strict';
 
-var assert = require('assert');
-var BN = require('bn.js');
-var consensus = require('../lib/protocol/consensus');
-var encoding = require('../lib/utils/encoding');
-var co = require('../lib/utils/co');
-var Coin = require('../lib/primitives/coin');
-var Script = require('../lib/script/script');
-var Chain = require('../lib/blockchain/chain');
-var Miner = require('../lib/mining/miner');
-var MTX = require('../lib/primitives/mtx');
-var MemWallet = require('./util/memwallet');
-var Network = require('../lib/protocol/network');
-var Output = require('../lib/primitives/output');
-var util = require('../lib/utils/util');
-var common = require('../lib/blockchain/common');
-var opcodes = Script.opcodes;
+const assert = require('./util/assert');
+const consensus = require('../lib/protocol/consensus');
+const encoding = require('../lib/utils/encoding');
+const Coin = require('../lib/primitives/coin');
+const Script = require('../lib/script/script');
+const Chain = require('../lib/blockchain/chain');
+const WorkerPool = require('../lib/workers/workerpool');
+const Miner = require('../lib/mining/miner');
+const MTX = require('../lib/primitives/mtx');
+const MemWallet = require('./util/memwallet');
+const Network = require('../lib/protocol/network');
+const Output = require('../lib/primitives/output');
+const common = require('../lib/blockchain/common');
+const Opcode = require('../lib/script/opcode');
+const opcodes = Script.opcodes;
+
+const network = Network.get('regtest');
+
+const workers = new WorkerPool({
+  enabled: true
+});
+
+const chain = new Chain({
+  db: 'memory',
+  network,
+  workers
+});
+
+const miner = new Miner({
+  chain,
+  version: 4,
+  workers
+});
+
+const cpu = miner.cpu;
+
+const wallet = new MemWallet({
+  network,
+  witness: false
+});
+
+const witWallet = new MemWallet({
+  network,
+  witness: true
+});
+
+let tip1 = null;
+let tip2 = null;
+
+async function addBlock(block, flags) {
+  let entry;
+
+  try {
+    entry = await chain.add(block, flags);
+  } catch (e) {
+    assert.strictEqual(e.type, 'VerifyError');
+    return e.reason;
+  }
+
+  if (!entry)
+    return 'bad-prevblk';
+
+  return 'OK';
+}
+
+async function mineBlock(job, flags) {
+  const block = await job.mineAsync();
+  return await addBlock(block, flags);
+}
+
+async function mineCSV(fund) {
+  const job = await cpu.createJob();
+  const spend = new MTX();
+
+  spend.addOutput({
+    script: [
+      Opcode.fromInt(1),
+      Opcode.fromSymbol('checksequenceverify')
+    ],
+    value: 10000
+  });
+
+  spend.addTX(fund, 0);
+  spend.setLocktime(chain.height);
+
+  wallet.sign(spend);
+
+  const [tx, view] = spend.commit();
+
+  job.addTX(tx, view);
+  job.refresh();
+
+  return await job.mineAsync();
+}
+
+chain.on('connect', (entry, block) => {
+  wallet.addBlock(entry, block.txs);
+});
+
+chain.on('disconnect', (entry, block) => {
+  wallet.removeBlock(entry, block.txs);
+});
 
 describe('Chain', function() {
-  var network = Network.get('regtest');
-  var chain = new Chain({ db: 'memory', network: network });
-  var miner = new Miner({ chain: chain, version: 4 });
-  var wallet = new MemWallet({ network: network });
-  var wwallet = new MemWallet({ network: network, witness: true });
-  var cpu = miner.cpu;
-  var tip1, tip2, addBlock, mineBlock, mineCSV;
-
   this.timeout(45000);
 
-  addBlock = co(function* addBlock(block, flags) {
-    var entry;
-
-    try {
-      entry = yield chain.add(block, flags);
-    } catch (e) {
-      assert(e.type === 'VerifyError');
-      return e.reason;
-    }
-
-    if (!entry)
-      return 'bad-prevblk';
-
-    return 'OK';
+  it('should open chain and miner', async () => {
+    await chain.open();
+    await miner.open();
   });
 
-  mineBlock = co(function* mineBlock(job, flags) {
-    var block = yield job.mineAsync();
-    return yield addBlock(block, flags);
-  });
-
-  mineCSV = co(function* mineCSV(tx) {
-    var job = yield cpu.createJob();
-    var rtx;
-
-    rtx = new MTX();
-
-    rtx.addOutput({
-      script: [
-        Script.array(new BN(1)),
-        Script.opcodes.OP_CHECKSEQUENCEVERIFY
-      ],
-      value: 10000
-    });
-
-    rtx.addTX(tx, 0);
-
-    rtx.setLocktime(chain.height);
-
-    wallet.sign(rtx);
-
-    job.addTX(rtx.toTX(), rtx.view);
-    job.refresh();
-
-    return yield job.mineAsync();
-  });
-
-  chain.on('connect', function(entry, block) {
-    wallet.addBlock(entry, block.txs);
-  });
-
-  chain.on('disconnect', function(entry, block) {
-    wallet.removeBlock(entry, block.txs);
-  });
-
-  it('should open chain and miner', co(function* () {
-    yield chain.open();
-    yield miner.open();
-  }));
-
-  it('should add addrs to miner', co(function* () {
+  it('should add addrs to miner', async () => {
     miner.addresses.length = 0;
     miner.addAddress(wallet.getReceive());
-  }));
+  });
 
-  it('should mine 200 blocks', co(function* () {
-    var i, block;
-
-    for (i = 0; i < 200; i++) {
-      block = yield cpu.mineBlock();
+  it('should mine 200 blocks', async () => {
+    for (let i = 0; i < 200; i++) {
+      const block = await cpu.mineBlock();
       assert(block);
-      assert(yield chain.add(block));
+      assert(await chain.add(block));
     }
 
-    assert.equal(chain.height, 200);
-  }));
+    assert.strictEqual(chain.height, 200);
+  });
 
-  it('should mine competing chains', co(function* () {
-    var i, mtx, job1, job2, blk1, blk2, hash1, hash2;
+  it('should mine competing chains', async () => {
+    for (let i = 0; i < 10; i++) {
+      const job1 = await cpu.createJob(tip1);
+      const job2 = await cpu.createJob(tip2);
 
-    for (i = 0; i < 10; i++) {
-      job1 = yield cpu.createJob(tip1);
-      job2 = yield cpu.createJob(tip2);
-
-      mtx = yield wallet.create({
+      const mtx = await wallet.create({
         outputs: [{
           address: wallet.getAddress(),
           value: 10 * 1e8
@@ -125,149 +147,147 @@ describe('Chain', function() {
       job1.refresh();
       job2.refresh();
 
-      blk1 = yield job1.mineAsync();
-      blk2 = yield job2.mineAsync();
+      const blk1 = await job1.mineAsync();
+      const blk2 = await job2.mineAsync();
 
-      hash1 = blk1.hash('hex');
-      hash2 = blk2.hash('hex');
+      const hash1 = blk1.hash('hex');
+      const hash2 = blk2.hash('hex');
 
-      assert(yield chain.add(blk1));
-      assert(yield chain.add(blk2));
+      assert(await chain.add(blk1));
+      assert(await chain.add(blk2));
 
-      assert(chain.tip.hash === hash1);
+      assert.strictEqual(chain.tip.hash, hash1);
 
-      tip1 = yield chain.db.getEntry(hash1);
-      tip2 = yield chain.db.getEntry(hash2);
+      tip1 = await chain.db.getEntry(hash1);
+      tip2 = await chain.db.getEntry(hash2);
 
       assert(tip1);
       assert(tip2);
 
-      assert(!(yield tip2.isMainChain()));
+      assert(!await tip2.isMainChain());
     }
-  }));
-
-  it('should have correct chain value', function() {
-    assert.equal(chain.db.state.value, 897500000000);
-    assert.equal(chain.db.state.coin, 220);
-    assert.equal(chain.db.state.tx, 221);
   });
 
-  it('should have correct wallet balance', co(function* () {
-    assert.equal(wallet.balance, 897500000000);
-  }));
+  it('should have correct chain value', () => {
+    assert.strictEqual(chain.db.state.value, 897500000000);
+    assert.strictEqual(chain.db.state.coin, 220);
+    assert.strictEqual(chain.db.state.tx, 221);
+  });
 
-  it('should handle a reorg', co(function* () {
-    var forked = false;
-    var entry, block;
+  it('should have correct wallet balance', async () => {
+    assert.strictEqual(wallet.balance, 897500000000);
+  });
 
-    assert.equal(chain.height, 210);
+  it('should handle a reorg', async () => {
+    assert.strictEqual(chain.height, 210);
 
-    entry = yield chain.db.getEntry(tip2.hash);
+    const entry = await chain.db.getEntry(tip2.hash);
     assert(entry);
-    assert(chain.height === entry.height);
+    assert.strictEqual(chain.height, entry.height);
 
-    block = yield cpu.mineBlock(entry);
+    const block = await cpu.mineBlock(entry);
     assert(block);
 
-    chain.once('reorganize', function() {
+    let forked = false;
+    chain.once('reorganize', () => {
       forked = true;
     });
 
-    assert(yield chain.add(block));
+    assert(await chain.add(block));
 
     assert(forked);
-    assert(chain.tip.hash === block.hash('hex'));
+    assert.strictEqual(chain.tip.hash, block.hash('hex'));
     assert(chain.tip.chainwork.cmp(tip1.chainwork) > 0);
-  }));
-
-  it('should have correct chain value', function() {
-    assert.equal(chain.db.state.value, 900000000000);
-    assert.equal(chain.db.state.coin, 221);
-    assert.equal(chain.db.state.tx, 222);
   });
 
-  it('should have correct wallet balance', co(function* () {
-    assert.equal(wallet.balance, 900000000000);
-  }));
+  it('should have correct chain value', () => {
+    assert.strictEqual(chain.db.state.value, 900000000000);
+    assert.strictEqual(chain.db.state.coin, 221);
+    assert.strictEqual(chain.db.state.tx, 222);
+  });
 
-  it('should check main chain', co(function* () {
-    var result = yield tip1.isMainChain();
+  it('should have correct wallet balance', async () => {
+    assert.strictEqual(wallet.balance, 900000000000);
+  });
+
+  it('should check main chain', async () => {
+    const result = await tip1.isMainChain();
     assert(!result);
-  }));
+  });
 
-  it('should mine a block after a reorg', co(function* () {
-    var block = yield cpu.mineBlock();
-    var hash, entry, result;
+  it('should mine a block after a reorg', async () => {
+    const block = await cpu.mineBlock();
 
-    assert(yield chain.add(block));
+    assert(await chain.add(block));
 
-    hash = block.hash('hex');
-    entry = yield chain.db.getEntry(hash);
+    const hash = block.hash('hex');
+    const entry = await chain.db.getEntry(hash);
 
     assert(entry);
-    assert(chain.tip.hash === entry.hash);
+    assert.strictEqual(chain.tip.hash, entry.hash);
 
-    result = yield entry.isMainChain();
+    const result = await entry.isMainChain();
     assert(result);
-  }));
+  });
 
-  it('should prevent double spend on new chain', co(function* () {
-    var job = yield cpu.createJob();
-    var mtx, block;
-
-    mtx = yield wallet.create({
+  it('should prevent double spend on new chain', async () => {
+    const mtx = await wallet.create({
       outputs: [{
         address: wallet.getAddress(),
         value: 10 * 1e8
       }]
     });
 
-    job.addTX(mtx.toTX(), mtx.view);
-    job.refresh();
+    {
+      const job = await cpu.createJob();
 
-    block = yield job.mineAsync();
+      job.addTX(mtx.toTX(), mtx.view);
+      job.refresh();
 
-    assert(yield chain.add(block));
+      const block = await job.mineAsync();
 
-    job = yield cpu.createJob();
+      assert(await chain.add(block));
+    }
 
-    assert(mtx.outputs.length > 1);
-    mtx.outputs.pop();
+    {
+      const job = await cpu.createJob();
 
-    job.addTX(mtx.toTX(), mtx.view);
-    job.refresh();
+      assert(mtx.outputs.length > 1);
+      mtx.outputs.pop();
 
-    assert.equal(yield mineBlock(job), 'bad-txns-inputs-missingorspent');
-  }));
+      job.addTX(mtx.toTX(), mtx.view);
+      job.refresh();
 
-  it('should fail to connect coins on an alternate chain', co(function* () {
-    var block = yield chain.db.getBlock(tip1.hash);
-    var cb = block.txs[0];
-    var mtx = new MTX();
-    var job;
+      assert.strictEqual(await mineBlock(job),
+        'bad-txns-inputs-missingorspent');
+    }
+  });
+
+  it('should fail to connect coins on an alternate chain', async () => {
+    const block = await chain.db.getBlock(tip1.hash);
+    const cb = block.txs[0];
+    const mtx = new MTX();
 
     mtx.addTX(cb, 0);
     mtx.addOutput(wallet.getAddress(), 10 * 1e8);
 
     wallet.sign(mtx);
 
-    job = yield cpu.createJob();
+    const job = await cpu.createJob();
     job.addTX(mtx.toTX(), mtx.view);
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'bad-txns-inputs-missingorspent');
-  }));
-
-  it('should have correct chain value', function() {
-    assert.equal(chain.db.state.value, 905000000000);
-    assert.equal(chain.db.state.coin, 224);
-    assert.equal(chain.db.state.tx, 225);
+    assert.strictEqual(await mineBlock(job), 'bad-txns-inputs-missingorspent');
   });
 
-  it('should get coin', co(function* () {
-    var mtx, job, block, tx, output, coin;
+  it('should have correct chain value', () => {
+    assert.strictEqual(chain.db.state.value, 905000000000);
+    assert.strictEqual(chain.db.state.coin, 224);
+    assert.strictEqual(chain.db.state.tx, 225);
+  });
 
-    mtx = yield wallet.send({
+  it('should get coin', async () => {
+    const mtx = await wallet.send({
       outputs: [
         {
           address: wallet.getAddress(),
@@ -284,286 +304,287 @@ describe('Chain', function() {
       ]
     });
 
-    job = yield cpu.createJob();
+    const job = await cpu.createJob();
     job.addTX(mtx.toTX(), mtx.view);
     job.refresh();
 
-    block = yield job.mineAsync();
-    assert(yield chain.add(block));
+    const block = await job.mineAsync();
+    assert(await chain.add(block));
 
-    tx = block.txs[1];
-    output = Coin.fromTX(tx, 2, chain.height);
+    const tx = block.txs[1];
+    const output = Coin.fromTX(tx, 2, chain.height);
 
-    coin = yield chain.db.getCoin(tx.hash('hex'), 2);
+    const coin = await chain.db.getCoin(tx.hash('hex'), 2);
 
-    assert.deepEqual(coin.toRaw(), output.toRaw());
-  }));
+    assert.bufferEqual(coin.toRaw(), output.toRaw());
+  });
 
-  it('should have correct wallet balance', co(function* () {
-    assert.equal(wallet.balance, 907500000000);
-    assert.equal(wallet.receiveDepth, 15);
-    assert.equal(wallet.changeDepth, 14);
-    assert.equal(wallet.txs, 226);
-  }));
+  it('should have correct wallet balance', async () => {
+    assert.strictEqual(wallet.balance, 907500000000);
+    assert.strictEqual(wallet.receiveDepth, 15);
+    assert.strictEqual(wallet.changeDepth, 14);
+    assert.strictEqual(wallet.txs, 226);
+  });
 
-  it('should get tips and remove chains', co(function* () {
-    var tips = yield chain.db.getTips();
+  it('should get tips and remove chains', async () => {
+    {
+      const tips = await chain.db.getTips();
 
-    assert.notEqual(tips.indexOf(chain.tip.hash), -1);
-    assert.equal(tips.length, 2);
+      assert.notStrictEqual(tips.indexOf(chain.tip.hash), -1);
+      assert.strictEqual(tips.length, 2);
+    }
 
-    yield chain.db.removeChains();
+    await chain.db.removeChains();
 
-    tips = yield chain.db.getTips();
+    {
+      const tips = await chain.db.getTips();
 
-    assert.notEqual(tips.indexOf(chain.tip.hash), -1);
-    assert.equal(tips.length, 1);
-  }));
+      assert.notStrictEqual(tips.indexOf(chain.tip.hash), -1);
+      assert.strictEqual(tips.length, 1);
+    }
+  });
 
-  it('should rescan for transactions', co(function* () {
-    var total = 0;
+  it('should rescan for transactions', async () => {
+    let total = 0;
 
-    yield chain.db.scan(0, wallet.filter, function(block, txs) {
+    await chain.db.scan(0, wallet.filter, async (block, txs) => {
       total += txs.length;
-      return Promise.resolve();
     });
 
-    assert.equal(total, 226);
-  }));
+    assert.strictEqual(total, 226);
+  });
 
-  it('should activate csv', co(function* () {
-    var deployments = network.deployments;
-    var i, block, prev, state, cache;
+  it('should activate csv', async () => {
+    const deployments = network.deployments;
 
     miner.options.version = -1;
 
-    assert.equal(chain.height, 214);
+    assert.strictEqual(chain.height, 214);
 
-    prev = yield chain.tip.getPrevious();
-    state = yield chain.getState(prev, deployments.csv);
-    assert.equal(state, 1);
+    const prev = await chain.tip.getPrevious();
+    const state = await chain.getState(prev, deployments.csv);
+    assert.strictEqual(state, 1);
 
-    for (i = 0; i < 417; i++) {
-      block = yield cpu.mineBlock();
-      assert(yield chain.add(block));
+    for (let i = 0; i < 417; i++) {
+      const block = await cpu.mineBlock();
+      assert(await chain.add(block));
       switch (chain.height) {
-        case 288:
-          prev = yield chain.tip.getPrevious();
-          state = yield chain.getState(prev, deployments.csv);
-          assert.equal(state, 1);
+        case 288: {
+          const prev = await chain.tip.getPrevious();
+          const state = await chain.getState(prev, deployments.csv);
+          assert.strictEqual(state, 1);
           break;
-        case 432:
-          prev = yield chain.tip.getPrevious();
-          state = yield chain.getState(prev, deployments.csv);
-          assert.equal(state, 2);
+        }
+        case 432: {
+          const prev = await chain.tip.getPrevious();
+          const state = await chain.getState(prev, deployments.csv);
+          assert.strictEqual(state, 2);
           break;
-        case 576:
-          prev = yield chain.tip.getPrevious();
-          state = yield chain.getState(prev, deployments.csv);
-          assert.equal(state, 3);
+        }
+        case 576: {
+          const prev = await chain.tip.getPrevious();
+          const state = await chain.getState(prev, deployments.csv);
+          assert.strictEqual(state, 3);
           break;
+        }
       }
     }
 
-    assert.equal(chain.height, 631);
+    assert.strictEqual(chain.height, 631);
     assert(chain.state.hasCSV());
     assert(chain.state.hasWitness());
 
-    cache = yield chain.db.getStateCache();
-    assert.deepEqual(cache, chain.db.stateCache);
-    assert.equal(chain.db.stateCache.updates.length, 0);
-    assert(yield chain.db.verifyDeployments());
-  }));
+    const cache = await chain.db.getStateCache();
+    assert.deepStrictEqual(cache, chain.db.stateCache);
+    assert.strictEqual(chain.db.stateCache.updates.length, 0);
+    assert(await chain.db.verifyDeployments());
+  });
 
-  it('should have activated segwit', co(function* () {
-    var deployments = network.deployments;
-    var prev = yield chain.tip.getPrevious();
-    var state = yield chain.getState(prev, deployments.segwit);
-    assert.equal(state, 3);
-  }));
+  it('should have activated segwit', async () => {
+    const deployments = network.deployments;
+    const prev = await chain.tip.getPrevious();
+    const state = await chain.getState(prev, deployments.segwit);
+    assert.strictEqual(state, 3);
+  });
 
-  it('should test csv', co(function* () {
-    var tx = (yield chain.db.getBlock(chain.height - 100)).txs[0];
-    var block = yield mineCSV(tx);
-    var csv, job, rtx;
+  it('should test csv', async () => {
+    const tx = (await chain.db.getBlock(chain.height - 100)).txs[0];
+    const csvBlock = await mineCSV(tx);
 
-    assert(yield chain.add(block));
+    assert(await chain.add(csvBlock));
 
-    csv = block.txs[1];
+    const csv = csvBlock.txs[1];
 
-    rtx = new MTX();
+    const spend = new MTX();
 
-    rtx.addOutput({
+    spend.addOutput({
       script: [
-        Script.array(new BN(2)),
-        Script.opcodes.OP_CHECKSEQUENCEVERIFY
+        Opcode.fromInt(2),
+        Opcode.fromSymbol('checksequenceverify')
       ],
       value: 10000
     });
 
-    rtx.addTX(csv, 0);
-    rtx.setSequence(0, 1, false);
+    spend.addTX(csv, 0);
+    spend.setSequence(0, 1, false);
 
-    job = yield cpu.createJob();
+    const job = await cpu.createJob();
 
-    job.addTX(rtx.toTX(), rtx.view);
+    job.addTX(spend.toTX(), spend.view);
     job.refresh();
 
-    block = yield job.mineAsync();
+    const block = await job.mineAsync();
 
-    assert(yield chain.add(block));
-  }));
+    assert(await chain.add(block));
+  });
 
-  it('should fail csv with bad sequence', co(function* () {
-    var csv = (yield chain.db.getBlock(chain.height - 100)).txs[0];
-    var rtx = new MTX();
-    var job;
+  it('should fail csv with bad sequence', async () => {
+    const csv = (await chain.db.getBlock(chain.height - 100)).txs[0];
+    const spend = new MTX();
 
-    rtx.addOutput({
+    spend.addOutput({
       script: [
-        Script.array(new BN(1)),
-        Script.opcodes.OP_CHECKSEQUENCEVERIFY
+        Opcode.fromInt(1),
+        Opcode.fromSymbol('checksequenceverify')
       ],
       value: 1 * 1e8
     });
 
-    rtx.addTX(csv, 0);
-    rtx.setSequence(0, 1, false);
+    spend.addTX(csv, 0);
+    spend.setSequence(0, 1, false);
 
-    job = yield cpu.createJob();
-    job.addTX(rtx.toTX(), rtx.view);
+    const job = await cpu.createJob();
+    job.addTX(spend.toTX(), spend.view);
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'mandatory-script-verify-flag-failed');
-  }));
+    assert.strictEqual(await mineBlock(job),
+      'mandatory-script-verify-flag-failed');
+  });
 
-  it('should mine a block', co(function* () {
-    var block = yield cpu.mineBlock();
+  it('should mine a block', async () => {
+    const block = await cpu.mineBlock();
     assert(block);
-    assert(yield chain.add(block));
-  }));
+    assert(await chain.add(block));
+  });
 
-  it('should fail csv lock checks', co(function* () {
-    var tx = (yield chain.db.getBlock(chain.height - 100)).txs[0];
-    var block = yield mineCSV(tx);
-    var csv, job, rtx;
+  it('should fail csv lock checks', async () => {
+    const tx = (await chain.db.getBlock(chain.height - 100)).txs[0];
+    const csvBlock = await mineCSV(tx);
 
-    assert(yield chain.add(block));
+    assert(await chain.add(csvBlock));
 
-    csv = block.txs[1];
+    const csv = csvBlock.txs[1];
 
-    rtx = new MTX();
+    const spend = new MTX();
 
-    rtx.addOutput({
+    spend.addOutput({
       script: [
-        Script.array(new BN(2)),
-        Script.opcodes.OP_CHECKSEQUENCEVERIFY
+        Opcode.fromInt(2),
+        Opcode.fromSymbol('checksequenceverify')
       ],
       value: 1 * 1e8
     });
 
-    rtx.addTX(csv, 0);
-    rtx.setSequence(0, 2, false);
+    spend.addTX(csv, 0);
+    spend.setSequence(0, 2, false);
 
-    job = yield cpu.createJob();
-    job.addTX(rtx.toTX(), rtx.view);
+    const job = await cpu.createJob();
+    job.addTX(spend.toTX(), spend.view);
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'bad-txns-nonfinal');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-txns-nonfinal');
+  });
 
-  it('should have correct wallet balance', co(function* () {
-    assert.equal(wallet.balance, 1412499980000);
-  }));
+  it('should have correct wallet balance', async () => {
+    assert.strictEqual(wallet.balance, 1412499980000);
+  });
 
-  it('should fail to connect bad bits', co(function* () {
-    var job = yield cpu.createJob();
+  it('should fail to connect bad bits', async () => {
+    const job = await cpu.createJob();
     job.attempt.bits = 553713663;
-    assert.equal(yield mineBlock(job), 'bad-diffbits');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-diffbits');
+  });
 
-  it('should fail to connect bad MTP', co(function* () {
-    var mtp = yield chain.tip.getMedianTime();
-    var job = yield cpu.createJob();
-    job.attempt.ts = mtp - 1;
-    assert.equal(yield mineBlock(job), 'time-too-old');
-  }));
+  it('should fail to connect bad MTP', async () => {
+    const mtp = await chain.tip.getMedianTime();
+    const job = await cpu.createJob();
+    job.attempt.time = mtp - 1;
+    assert.strictEqual(await mineBlock(job), 'time-too-old');
+  });
 
-  it('should fail to connect bad time', co(function* () {
-    var job = yield cpu.createJob();
-    var now = network.now() + 3 * 60 * 60;
-    job.attempt.ts = now;
-    assert.equal(yield mineBlock(job), 'time-too-new');
-  }));
+  it('should fail to connect bad time', async () => {
+    const job = await cpu.createJob();
+    const now = network.now() + 3 * 60 * 60;
+    job.attempt.time = now;
+    assert.strictEqual(await mineBlock(job), 'time-too-new');
+  });
 
-  it('should fail to connect bad locktime', co(function* () {
-    var job = yield cpu.createJob();
-    var tx = yield wallet.send({ locktime: 100000 });
+  it('should fail to connect bad locktime', async () => {
+    const job = await cpu.createJob();
+    const tx = await wallet.send({ locktime: 100000 });
     job.pushTX(tx.toTX());
     job.refresh();
-    assert.equal(yield mineBlock(job), 'bad-txns-nonfinal');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-txns-nonfinal');
+  });
 
-  it('should fail to connect bad cb height', co(function* () {
-    var bip34height = network.block.bip34height;
-    var job = yield cpu.createJob();
+  it('should fail to connect bad cb height', async () => {
+    const bip34height = network.block.bip34height;
+    const job = await cpu.createJob();
 
     job.attempt.height = 10;
     job.attempt.refresh();
 
     try {
       network.block.bip34height = 0;
-      assert.equal(yield mineBlock(job), 'bad-cb-height');
+      assert.strictEqual(await mineBlock(job), 'bad-cb-height');
     } finally {
       network.block.bip34height = bip34height;
     }
-  }));
+  });
 
-  it('should fail to connect bad witness nonce size', co(function* () {
-    var block = yield cpu.mineBlock();
-    var tx = block.txs[0];
-    var input = tx.inputs[0];
-    input.witness.set(0, new Buffer(33));
-    input.witness.compile();
+  it('should fail to connect bad witness nonce size', async () => {
+    const block = await cpu.mineBlock();
+    const tx = block.txs[0];
+    const input = tx.inputs[0];
+    input.witness.set(0, Buffer.allocUnsafe(33));
     block.refresh(true);
-    assert.equal(yield addBlock(block), 'bad-witness-nonce-size');
-  }));
+    assert.strictEqual(await addBlock(block), 'bad-witness-nonce-size');
+  });
 
-  it('should fail to connect bad witness nonce', co(function* () {
-    var block = yield cpu.mineBlock();
-    var tx = block.txs[0];
-    var input = tx.inputs[0];
+  it('should fail to connect bad witness nonce', async () => {
+    const block = await cpu.mineBlock();
+    const tx = block.txs[0];
+    const input = tx.inputs[0];
     input.witness.set(0, encoding.ONE_HASH);
-    input.witness.compile();
     block.refresh(true);
-    assert.equal(yield addBlock(block), 'bad-witness-merkle-match');
-  }));
+    assert.strictEqual(await addBlock(block), 'bad-witness-merkle-match');
+  });
 
-  it('should fail to connect bad witness commitment', co(function* () {
-    var flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
-    var block = yield cpu.mineBlock();
-    var tx = block.txs[0];
-    var output = tx.outputs[1];
-    var commit;
+  it('should fail to connect bad witness commitment', async () => {
+    const flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
+    const block = await cpu.mineBlock();
+    const tx = block.txs[0];
+    const output = tx.outputs[1];
 
     assert(output.script.isCommitment());
 
-    commit = util.copy(output.script.get(1));
+    const commit = Buffer.from(output.script.getData(1));
     commit.fill(0, 10);
-    output.script.set(1, commit);
+    output.script.setData(1, commit);
     output.script.compile();
 
     block.refresh(true);
     block.merkleRoot = block.createMerkleRoot('hex');
 
-    assert.equal(yield addBlock(block, flags), 'bad-witness-merkle-match');
-  }));
+    assert.strictEqual(await addBlock(block, flags),
+      'bad-witness-merkle-match');
+  });
 
-  it('should fail to connect unexpected witness', co(function* () {
-    var flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
-    var block = yield cpu.mineBlock();
-    var tx = block.txs[0];
-    var output = tx.outputs[1];
+  it('should fail to connect unexpected witness', async () => {
+    const flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
+    const block = await cpu.mineBlock();
+    const tx = block.txs[0];
+    const output = tx.outputs[1];
 
     assert(output.script.isCommitment());
 
@@ -572,227 +593,219 @@ describe('Chain', function() {
     block.refresh(true);
     block.merkleRoot = block.createMerkleRoot('hex');
 
-    assert.equal(yield addBlock(block, flags), 'unexpected-witness');
-  }));
+    assert.strictEqual(await addBlock(block, flags), 'unexpected-witness');
+  });
 
-  it('should add wit addrs to miner', co(function* () {
+  it('should add wit addrs to miner', async () => {
     miner.addresses.length = 0;
-    miner.addAddress(wwallet.getReceive());
-    assert.equal(wwallet.getReceive().getType(), 'witness');
-  }));
+    miner.addAddress(witWallet.getReceive());
+    assert.strictEqual(witWallet.getReceive().getType(), 'witness');
+  });
 
-  it('should mine 2000 witness blocks', co(function* () {
-    var i, block;
-
-    for (i = 0; i < 2001; i++) {
-      block = yield cpu.mineBlock();
+  it('should mine 2000 witness blocks', async () => {
+    for (let i = 0; i < 2001; i++) {
+      const block = await cpu.mineBlock();
       assert(block);
-      assert(yield chain.add(block));
+      assert(await chain.add(block));
     }
 
-    assert.equal(chain.height, 2636);
-  }));
+    assert.strictEqual(chain.height, 2636);
+  });
 
-  it('should mine a witness tx', co(function* () {
-    var block = yield chain.db.getBlock(chain.height - 2000);
-    var cb = block.txs[0];
-    var mtx = new MTX();
-    var job;
+  it('should mine a witness tx', async () => {
+    const prev = await chain.db.getBlock(chain.height - 2000);
+    const cb = prev.txs[0];
+    const mtx = new MTX();
 
     mtx.addTX(cb, 0);
-    mtx.addOutput(wwallet.getAddress(), 1000);
+    mtx.addOutput(witWallet.getAddress(), 1000);
 
-    wwallet.sign(mtx);
+    witWallet.sign(mtx);
 
-    job = yield cpu.createJob();
+    const job = await cpu.createJob();
     job.addTX(mtx.toTX(), mtx.view);
     job.refresh();
 
-    block = yield job.mineAsync();
+    const block = await job.mineAsync();
 
-    assert(yield chain.add(block));
-  }));
+    assert(await chain.add(block));
+  });
 
-  it('should mine fail to connect too much weight', co(function* () {
-    var start = chain.height - 2000;
-    var end = chain.height - 200;
-    var job = yield cpu.createJob();
-    var mtx = new MTX();
-    var i, j, block, cb;
+  it('should mine fail to connect too much weight', async () => {
+    const start = chain.height - 2000;
+    const end = chain.height - 200;
+    const job = await cpu.createJob();
 
-    for (i = start; i <= end; i++) {
-      block = yield chain.db.getBlock(i);
-      cb = block.txs[0];
+    for (let i = start; i <= end; i++) {
+      const block = await chain.db.getBlock(i);
+      const cb = block.txs[0];
 
-      mtx = new MTX();
+      const mtx = new MTX();
       mtx.addTX(cb, 0);
 
-      for (j = 0; j < 16; j++)
-        mtx.addOutput(wwallet.getAddress(), 1);
+      for (let j = 0; j < 16; j++)
+        mtx.addOutput(witWallet.getAddress(), 1);
 
-      wwallet.sign(mtx);
+      witWallet.sign(mtx);
 
       job.pushTX(mtx.toTX());
     }
 
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'bad-blk-weight');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-blk-weight');
+  });
 
-  it('should mine fail to connect too much size', co(function* () {
-    var start = chain.height - 2000;
-    var end = chain.height - 200;
-    var job = yield cpu.createJob();
-    var mtx = new MTX();
-    var i, j, block, cb;
+  it('should mine fail to connect too much size', async () => {
+    const start = chain.height - 2000;
+    const end = chain.height - 200;
+    const job = await cpu.createJob();
 
-    for (i = start; i <= end; i++) {
-      block = yield chain.db.getBlock(i);
-      cb = block.txs[0];
+    for (let i = start; i <= end; i++) {
+      const block = await chain.db.getBlock(i);
+      const cb = block.txs[0];
 
-      mtx = new MTX();
+      const mtx = new MTX();
       mtx.addTX(cb, 0);
 
-      for (j = 0; j < 20; j++)
-        mtx.addOutput(wwallet.getAddress(), 1);
+      for (let j = 0; j < 20; j++)
+        mtx.addOutput(witWallet.getAddress(), 1);
 
-      wwallet.sign(mtx);
+      witWallet.sign(mtx);
 
       job.pushTX(mtx.toTX());
     }
 
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'bad-blk-length');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-blk-length');
+  });
 
-  it('should mine a big block', co(function* () {
-    var start = chain.height - 2000;
-    var end = chain.height - 200;
-    var job = yield cpu.createJob();
-    var mtx = new MTX();
-    var i, j, block, cb;
+  it('should mine a big block', async () => {
+    const start = chain.height - 2000;
+    const end = chain.height - 200;
+    const job = await cpu.createJob();
 
-    for (i = start; i <= end; i++) {
-      block = yield chain.db.getBlock(i);
-      cb = block.txs[0];
+    for (let i = start; i <= end; i++) {
+      const block = await chain.db.getBlock(i);
+      const cb = block.txs[0];
 
-      mtx = new MTX();
+      const mtx = new MTX();
       mtx.addTX(cb, 0);
 
-      for (j = 0; j < 15; j++)
-        mtx.addOutput(wwallet.getAddress(), 1);
+      for (let j = 0; j < 15; j++)
+        mtx.addOutput(witWallet.getAddress(), 1);
 
-      wwallet.sign(mtx);
+      witWallet.sign(mtx);
 
       job.pushTX(mtx.toTX());
     }
 
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'OK');
-  }));
+    assert.strictEqual(await mineBlock(job), 'OK');
+  });
 
-  it('should fail to connect bad versions', co(function* () {
-    var i, job;
-
-    for (i = 0; i <= 3; i++) {
-      job = yield cpu.createJob();
+  it('should fail to connect bad versions', async () => {
+    for (let i = 0; i <= 3; i++) {
+      const job = await cpu.createJob();
       job.attempt.version = i;
-      assert.equal(yield mineBlock(job), 'bad-version');
+      assert.strictEqual(await mineBlock(job), 'bad-version');
     }
-  }));
+  });
 
-  it('should fail to connect bad amount', co(function* () {
-    var job = yield cpu.createJob();
+  it('should fail to connect bad amount', async () => {
+    const job = await cpu.createJob();
 
     job.attempt.fees += 1;
     job.refresh();
-    assert.equal(yield mineBlock(job), 'bad-cb-amount');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-cb-amount');
+  });
 
-  it('should fail to connect premature cb spend', co(function* () {
-    var job = yield cpu.createJob();
-    var block = yield chain.db.getBlock(chain.height - 98);
-    var cb = block.txs[0];
-    var mtx = new MTX();
+  it('should fail to connect premature cb spend', async () => {
+    const job = await cpu.createJob();
+    const block = await chain.db.getBlock(chain.height - 98);
+    const cb = block.txs[0];
+    const mtx = new MTX();
 
     mtx.addTX(cb, 0);
-    mtx.addOutput(wwallet.getAddress(), 1);
+    mtx.addOutput(witWallet.getAddress(), 1);
 
-    wwallet.sign(mtx);
+    witWallet.sign(mtx);
 
     job.addTX(mtx.toTX(), mtx.view);
     job.refresh();
 
-    assert.equal(yield mineBlock(job),
+    assert.strictEqual(await mineBlock(job),
       'bad-txns-premature-spend-of-coinbase');
-  }));
+  });
 
-  it('should fail to connect vout belowout', co(function* () {
-    var job = yield cpu.createJob();
-    var block = yield chain.db.getBlock(chain.height - 99);
-    var cb = block.txs[0];
-    var mtx = new MTX();
+  it('should fail to connect vout belowout', async () => {
+    const job = await cpu.createJob();
+    const block = await chain.db.getBlock(chain.height - 99);
+    const cb = block.txs[0];
+    const mtx = new MTX();
 
     mtx.addTX(cb, 0);
-    mtx.addOutput(wwallet.getAddress(), 1e8);
+    mtx.addOutput(witWallet.getAddress(), 1e8);
 
-    wwallet.sign(mtx);
+    witWallet.sign(mtx);
 
     job.pushTX(mtx.toTX());
     job.refresh();
 
-    assert.equal(yield mineBlock(job),
+    assert.strictEqual(await mineBlock(job),
       'bad-txns-in-belowout');
-  }));
+  });
 
-  it('should fail to connect outtotal toolarge', co(function* () {
-    var job = yield cpu.createJob();
-    var block = yield chain.db.getBlock(chain.height - 99);
-    var cb = block.txs[0];
-    var mtx = new MTX();
+  it('should fail to connect outtotal toolarge', async () => {
+    const job = await cpu.createJob();
+    const block = await chain.db.getBlock(chain.height - 99);
+    const cb = block.txs[0];
+    const mtx = new MTX();
 
     mtx.addTX(cb, 0);
-    mtx.addOutput(wwallet.getAddress(), Math.floor(consensus.MAX_MONEY / 2));
-    mtx.addOutput(wwallet.getAddress(), Math.floor(consensus.MAX_MONEY / 2));
-    mtx.addOutput(wwallet.getAddress(), Math.floor(consensus.MAX_MONEY / 2));
 
-    wwallet.sign(mtx);
+    const value = Math.floor(consensus.MAX_MONEY / 2);
+
+    mtx.addOutput(witWallet.getAddress(), value);
+    mtx.addOutput(witWallet.getAddress(), value);
+    mtx.addOutput(witWallet.getAddress(), value);
+
+    witWallet.sign(mtx);
 
     job.pushTX(mtx.toTX());
     job.refresh();
 
-    assert.equal(yield mineBlock(job),
+    assert.strictEqual(await mineBlock(job),
       'bad-txns-txouttotal-toolarge');
-  }));
+  });
 
-  it('should mine 111 multisig blocks', co(function* () {
-    var flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
-    var i, j, script, job, cb, output, val, block;
+  it('should mine 111 multisig blocks', async () => {
+    const flags = common.flags.DEFAULT_FLAGS & ~common.flags.VERIFY_POW;
 
-    script = new Script();
-    script.push(new BN(20));
+    const redeem = new Script();
+    redeem.pushInt(20);
 
-    for (i = 0; i < 20; i++)
-      script.push(encoding.ZERO_KEY);
+    for (let i = 0; i < 20; i++)
+      redeem.pushData(encoding.ZERO_KEY);
 
-    script.push(new BN(20));
-    script.push(opcodes.OP_CHECKMULTISIG);
-    script.compile();
+    redeem.pushInt(20);
+    redeem.pushOp(opcodes.OP_CHECKMULTISIG);
 
-    script = Script.fromScripthash(script.hash160());
+    redeem.compile();
 
-    for (i = 0; i < 111; i++) {
-      block = yield cpu.mineBlock();
-      cb = block.txs[0];
-      val = cb.outputs[0].value;
+    const script = Script.fromScripthash(redeem.hash160());
+
+    for (let i = 0; i < 111; i++) {
+      const block = await cpu.mineBlock();
+      const cb = block.txs[0];
+      const val = cb.outputs[0].value;
 
       cb.outputs[0].value = 0;
 
-      for (j = 0; j < Math.min(100, val); j++) {
-        output = new Output();
+      for (let j = 0; j < Math.min(100, val); j++) {
+        const output = new Output();
         output.script = script.clone();
         output.value = 1;
 
@@ -802,54 +815,55 @@ describe('Chain', function() {
       block.refresh(true);
       block.merkleRoot = block.createMerkleRoot('hex');
 
-      assert(yield chain.add(block, flags));
+      assert(await chain.add(block, flags));
     }
 
-    assert.equal(chain.height, 2749);
-  }));
+    assert.strictEqual(chain.height, 2749);
+  });
 
-  it('should fail to connect too many sigops', co(function* () {
-    var start = chain.height - 110;
-    var end = chain.height - 100;
-    var job = yield cpu.createJob();
-    var i, j, mtx, script, block, cb;
+  it('should fail to connect too many sigops', async () => {
+    const start = chain.height - 110;
+    const end = chain.height - 100;
+    const job = await cpu.createJob();
 
-    script = new Script();
-    script.push(new BN(20));
+    const script = new Script();
 
-    for (i = 0; i < 20; i++)
-      script.push(encoding.ZERO_KEY);
+    script.pushInt(20);
 
-    script.push(new BN(20));
-    script.push(opcodes.OP_CHECKMULTISIG);
+    for (let i = 0; i < 20; i++)
+      script.pushData(encoding.ZERO_KEY);
+
+    script.pushInt(20);
+    script.pushOp(opcodes.OP_CHECKMULTISIG);
+
     script.compile();
 
-    for (i = start; i <= end; i++) {
-      block = yield chain.db.getBlock(i);
-      cb = block.txs[0];
+    for (let i = start; i <= end; i++) {
+      const block = await chain.db.getBlock(i);
+      const cb = block.txs[0];
 
       if (cb.outputs.length === 2)
         continue;
 
-      mtx = new MTX();
+      const mtx = new MTX();
 
-      for (j = 2; j < cb.outputs.length; j++) {
+      for (let j = 2; j < cb.outputs.length; j++) {
         mtx.addTX(cb, j);
-        mtx.inputs[j - 2].script = new Script([script.toRaw()]);
+        mtx.inputs[j - 2].script.fromItems([script.toRaw()]);
       }
 
-      mtx.addOutput(wwallet.getAddress(), 1);
+      mtx.addOutput(witWallet.getAddress(), 1);
 
       job.pushTX(mtx.toTX());
     }
 
     job.refresh();
 
-    assert.equal(yield mineBlock(job), 'bad-blk-sigops');
-  }));
+    assert.strictEqual(await mineBlock(job), 'bad-blk-sigops');
+  });
 
-  it('should cleanup', co(function* () {
-    yield miner.close();
-    yield chain.close();
-  }));
+  it('should cleanup', async () => {
+    await miner.close();
+    await chain.close();
+  });
 });
