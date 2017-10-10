@@ -8,17 +8,18 @@ const Path = require('../lib/wallet/path');
 const MasterKey = require('../lib/wallet/masterkey');
 const Account = require('../lib/wallet/account');
 const Wallet = require('../lib/wallet/wallet');
+const KeyRing = require('../lib/primitives/keyring');
 const BufferReader = require('../lib/utils/reader');
 const BufferWriter = require('../lib/utils/writer');
-let layout = walletdb.layout;
+const layout = walletdb.layout;
 let file = process.argv[2];
-let db, batch;
+let batch;
 
 assert(typeof file === 'string', 'Please pass in a database path.');
 
 file = file.replace(/\.ldb\/?$/, '');
 
-db = bcoin.ldb({
+const db = bcoin.ldb({
   location: file,
   db: 'leveldb',
   compression: true,
@@ -28,15 +29,14 @@ db = bcoin.ldb({
 });
 
 async function updateVersion() {
-  let bak = `${process.env.HOME}/walletdb-bak-${Date.now()}.ldb`;
-  let data, ver;
+  const bak = `${process.env.HOME}/walletdb-bak-${Date.now()}.ldb`;
 
   console.log('Checking version.');
 
-  data = await db.get('V');
+  const data = await db.get('V');
   assert(data, 'No version.');
 
-  ver = data.readUInt32LE(0, true);
+  let ver = data.readUInt32LE(0, true);
 
   if (ver !== 2)
     throw Error(`DB is version ${ver}.`);
@@ -52,10 +52,8 @@ async function updateVersion() {
 
 async function updatePathMap() {
   let total = 0;
-  let i, iter, item, oldPaths, oldPath;
-  let hash, path, keys, key, ring;
 
-  iter = db.iterator({
+  const iter = db.iterator({
     gte: layout.p(encoding.NULL_HASH),
     lte: layout.p(encoding.HIGH_HASH),
     values: true
@@ -64,21 +62,21 @@ async function updatePathMap() {
   console.log('Migrating path map.');
 
   for (;;) {
-    item = await iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;
 
     total++;
-    hash = layout.pp(item.key);
-    oldPaths = parsePaths(item.value, hash);
-    keys = Object.keys(oldPaths);
+    const hash = layout.pp(item.key);
+    const oldPaths = parsePaths(item.value, hash);
+    const keys = Object.keys(oldPaths);
 
-    for (i = 0; i < keys.length; i++) {
-      keys[i] = +keys[i];
-      key = keys[i];
-      oldPath = oldPaths[key];
-      path = new Path(oldPath);
+    for (let i = 0; i < keys.length; i++) {
+      keys[i] = Number(keys[i]);
+      const key = keys[i];
+      const oldPath = oldPaths[key];
+      const path = new Path(oldPath);
       if (path.data) {
         if (path.encrypted) {
           console.log(
@@ -87,8 +85,8 @@ async function updatePathMap() {
             path.toAddress().toBase58());
           continue;
         }
-        ring = keyFromRaw(path.data);
-        path.data = new bcoin.keyring(ring).toRaw();
+        const ring = keyFromRaw(path.data);
+        path.data = new KeyRing(ring).toRaw();
       }
       batch.put(layout.P(key, hash), path.toRaw());
     }
@@ -101,9 +99,8 @@ async function updatePathMap() {
 
 async function updateAccounts() {
   let total = 0;
-  let iter, item, account, buf;
 
-  iter = db.iterator({
+  const iter = db.iterator({
     gte: layout.a(0, 0),
     lte: layout.a(0xffffffff, 0xffffffff),
     values: true
@@ -112,19 +109,19 @@ async function updateAccounts() {
   console.log('Migrating accounts.');
 
   for (;;) {
-    item = await iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;
 
     total++;
-    account = accountFromRaw(item.value, item.key);
+    let account = accountFromRaw(item.value, item.key);
     account = new Account({ network: account.network, options: {} }, account);
     batch.put(item.key, account.toRaw());
 
     if (account._old) {
       batch.del(layout.i(account.wid, account._old));
-      buf = Buffer.allocUnsafe(4);
+      const buf = Buffer.allocUnsafe(4);
       buf.writeUInt32LE(account.accountIndex, 0, true);
       batch.put(layout.i(account.wid, account.name), buf);
     }
@@ -135,9 +132,8 @@ async function updateAccounts() {
 
 async function updateWallets() {
   let total = 0;
-  let iter, item, wallet, buf;
 
-  iter = db.iterator({
+  const iter = db.iterator({
     gte: layout.w(0),
     lte: layout.w(0xffffffff),
     values: true
@@ -146,19 +142,19 @@ async function updateWallets() {
   console.log('Migrating wallets.');
 
   for (;;) {
-    item = await iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;
 
     total++;
-    wallet = walletFromRaw(item.value);
+    let wallet = walletFromRaw(item.value);
     wallet = new Wallet({ network: wallet.network }, wallet);
     batch.put(item.key, wallet.toRaw());
 
     if (wallet._old) {
       batch.del(layout.l(wallet._old));
-      buf = Buffer.allocUnsafe(4);
+      const buf = Buffer.allocUnsafe(4);
       buf.writeUInt32LE(wallet.wid, 0, true);
       batch.put(layout.l(wallet.id), buf);
     }
@@ -169,9 +165,8 @@ async function updateWallets() {
 
 async function updateTXMap() {
   let total = 0;
-  let iter, item, wallets;
 
-  iter = db.iterator({
+  const iter = db.iterator({
     gte: layout.e(encoding.NULL_HASH),
     lte: layout.e(encoding.HIGH_HASH),
     values: true
@@ -180,13 +175,13 @@ async function updateTXMap() {
   console.log('Migrating tx map.');
 
   for (;;) {
-    item = await iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;
 
     total++;
-    wallets = parseWallets(item.value);
+    const wallets = parseWallets(item.value);
     batch.put(item.key, serializeWallets(wallets.sort()));
   }
 
@@ -194,8 +189,8 @@ async function updateTXMap() {
 }
 
 function pathFromRaw(data) {
-  let path = {};
-  let p = new BufferReader(data);
+  const path = {};
+  const p = new BufferReader(data);
 
   path.wid = p.readU32();
   path.name = p.readVarString('utf8');
@@ -221,19 +216,18 @@ function pathFromRaw(data) {
       break;
   }
 
-  path.version = p.read8();
+  path.version = p.readI8();
   path.type = p.readU8();
 
   return path;
 }
 
 function parsePaths(data, hash) {
-  let p = new BufferReader(data);
-  let out = {};
-  let path;
+  const p = new BufferReader(data);
+  const out = {};
 
   while (p.left()) {
-    path = pathFromRaw(p);
+    const path = pathFromRaw(p);
     out[path.wid] = path;
     if (hash)
       path.hash = hash;
@@ -243,19 +237,18 @@ function parsePaths(data, hash) {
 }
 
 function parseWallets(data) {
-  let p = new BufferReader(data);
-  let wallets = [];
+  const p = new BufferReader(data);
+  const wallets = [];
   while (p.left())
     wallets.push(p.readU32());
   return wallets;
 }
 
 function serializeWallets(wallets) {
-  let p = new BufferWriter();
-  let i, wid;
+  const p = new BufferWriter();
 
-  for (i = 0; i < wallets.length; i++) {
-    wid = wallets[i];
+  for (let i = 0; i < wallets.length; i++) {
+    const wid = wallets[i];
     p.writeU32(wid);
   }
 
@@ -270,9 +263,8 @@ function readAccountKey(key) {
 }
 
 function accountFromRaw(data, dbkey) {
-  let account = {};
-  let p = new BufferReader(data);
-  let i, count, key, name;
+  const account = {};
+  const p = new BufferReader(data);
 
   dbkey = readAccountKey(dbkey);
   account.wid = dbkey.wid;
@@ -292,7 +284,7 @@ function accountFromRaw(data, dbkey) {
   account.watchOnly = false;
   account.nestedDepth = 0;
 
-  name = account.name.replace(/[^\-\._0-9A-Za-z]+/g, '');
+  const name = account.name.replace(/[^\-\._0-9A-Za-z]+/g, '');
 
   if (name !== account.name) {
     console.log('Account name changed: %s -> %s.', account.name, name);
@@ -300,10 +292,10 @@ function accountFromRaw(data, dbkey) {
     account.name = name;
   }
 
-  count = p.readU8();
+  const count = p.readU8();
 
-  for (i = 0; i < count; i++) {
-    key = bcoin.hd.fromRaw(p.readBytes(82));
+  for (let i = 0; i < count; i++) {
+    const key = bcoin.hd.fromRaw(p.readBytes(82));
     account.keys.push(key);
   }
 
@@ -311,9 +303,8 @@ function accountFromRaw(data, dbkey) {
 }
 
 function walletFromRaw(data) {
-  let wallet = {};
-  let p = new BufferReader(data);
-  let id;
+  const wallet = {};
+  const p = new BufferReader(data);
 
   wallet.network = bcoin.network.fromMagic(p.readU32());
   wallet.wid = p.readU32();
@@ -325,7 +316,7 @@ function walletFromRaw(data) {
   wallet.master = MasterKey.fromRaw(p.readVarBytes());
   wallet.watchOnly = false;
 
-  id = wallet.id.replace(/[^\-\._0-9A-Za-z]+/g, '');
+  const id = wallet.id.replace(/[^\-\._0-9A-Za-z]+/g, '');
 
   if (id !== wallet.id) {
     console.log('Wallet ID changed: %s -> %s.', wallet.id, id);
@@ -337,14 +328,13 @@ function walletFromRaw(data) {
 }
 
 function keyFromRaw(data, network) {
-  let ring = {};
-  let p = new BufferReader(data);
-  let key, script;
+  const ring = {};
+  const p = new BufferReader(data);
 
   ring.network = bcoin.network.get(network);
   ring.witness = p.readU8() === 1;
 
-  key = p.readVarBytes();
+  const key = p.readVarBytes();
 
   if (key.length === 32) {
     ring.privateKey = key;
@@ -353,7 +343,7 @@ function keyFromRaw(data, network) {
     ring.publicKey = key;
   }
 
-  script = p.readVarBytes();
+  const script = p.readVarBytes();
 
   if (script.length > 0)
     ring.script = bcoin.script.fromRaw(script);

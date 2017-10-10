@@ -11,12 +11,11 @@ for (let i = 0; i < 3000; i++)
   leaves.push(random.randomBytes(32));
 
 {
-  let end = bench('tree');
-  let i;
-  for (i = 0; i < 1000; i++) {
-    let [n, m] = merkle.createTree(leaves.slice());
+  const end = bench('tree');
+  for (let i = 0; i < 1000; i++) {
+    const [n, m] = merkle.createTree(leaves.slice());
     assert(n);
     assert(!m);
   }
-  end(i);
+  end(1000);
 }

@@ -1,158 +1,49 @@
+/* eslint-env mocha */
+/* eslint prefer-arrow-callback: "off" */
+
 'use strict';
 
-const assert = require('assert');
-const digest = require('../lib/crypto/digest');
+const assert = require('./util/assert');
 const aes = require('../lib/crypto/aes');
-const pbkdf2 = require('../lib/crypto/pbkdf2');
-const nativeCrypto = require('crypto');
+
+const key = Buffer.from(
+  '3a0c0bf669694ac7685e6806eeadee8e56c9b9bd22c3caa81c718ed4bbf809a1',
+  'hex');
+
+const iv = Buffer.from('6dd26d9045b73c377a9ed2ffeca72ffd', 'hex');
 
 describe('AES', function() {
-  function pbkdf2key(passphrase, iterations, dkLen, ivLen, alg) {
-    let key = pbkdf2.derive(passphrase, '', iterations, dkLen + ivLen, 'sha512');
-    return {
-      key: key.slice(0, dkLen),
-      iv: key.slice(dkLen, dkLen + ivLen)
-    };
-  }
+  it('should encrypt and decrypt with 2 blocks', () => {
+    const data = Buffer.from(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      'hex');
 
-  function nencrypt(data, passphrase) {
-    let key, cipher;
+    const expected = Buffer.from(''
+      + '83de502a9c83112ca6383f2214a892a0cdad5ab2b3e192e'
+      + '9921ddb126b25262c41f1dcff4d67ccfb40e4116e5a4569c1',
+      'hex');
 
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
+    const ciphertext = aes.encipher(data, key, iv);
+    assert.bufferEqual(ciphertext, expected);
 
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'utf8');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-    cipher = nativeCrypto.createCipheriv('aes-256-cbc', key.key, key.iv);
-
-    return Buffer.concat([
-      cipher.update(data),
-      cipher.final()
-    ]);
-  }
-
-  function ndecrypt(data, passphrase) {
-    let key, decipher;
-
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
-
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'hex');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-    decipher = nativeCrypto.createDecipheriv('aes-256-cbc', key.key, key.iv);
-
-    return Buffer.concat([
-      decipher.update(data),
-      decipher.final()
-    ]);
-  }
-
-  function bencrypt(data, passphrase) {
-    let key;
-
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
-
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'utf8');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-    return aes.encipher(data, key.key, key.iv);
-  }
-
-  function bdecrypt(data, passphrase) {
-    let key;
-
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
-
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'hex');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-    return aes.decipher(data, key.key, key.iv);
-  }
-
-  function encrypt(data, passphrase) {
-    let key;
-
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
-
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'utf8');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-
-    return aes.encipher(data, key.key, key.iv);
-  }
-
-  function decrypt(data, passphrase) {
-    let key;
-
-    assert(nativeCrypto, 'No crypto module available.');
-    assert(passphrase, 'No passphrase.');
-
-    if (typeof data === 'string')
-      data = Buffer.from(data, 'hex');
-
-    if (typeof passphrase === 'string')
-      passphrase = Buffer.from(passphrase, 'utf8');
-
-    key = pbkdf2key(passphrase, 2048, 32, 16);
-
-    return aes.decipher(data, key.key, key.iv);
-  }
-
-  it('should encrypt and decrypt a hash with 2 blocks', () => {
-    let hash = digest.sha256(Buffer.alloc(0));
-    let enchash = encrypt(hash, 'foo');
-    let dechash = decrypt(enchash, 'foo');
-
-    let hash2 = digest.sha256(Buffer.alloc(0));
-    let enchash2 = nencrypt(hash2, 'foo');
-    let dechash2 = ndecrypt(enchash2, 'foo');
-
-    let hash3 = digest.sha256(Buffer.alloc(0));
-    let enchash3 = bencrypt(hash3, 'foo');
-    let dechash3 = bdecrypt(enchash3, 'foo');
-
-    assert.deepEqual(hash, hash2);
-    assert.deepEqual(enchash, enchash2);
-    assert.deepEqual(dechash, dechash2);
-    assert.deepEqual(dechash, dechash3);
+    const plaintext = aes.decipher(ciphertext, key, iv);
+    assert.bufferEqual(plaintext, data);
   });
 
-  it('should encrypt and decrypt a hash with uneven blocks', () => {
-    let hash = Buffer.concat([digest.sha256(Buffer.alloc(0)), Buffer.from([1,2,3])]);
-    let enchash = encrypt(hash, 'foo');
-    let dechash = decrypt(enchash, 'foo');
+  it('should encrypt and decrypt with uneven blocks', () => {
+    const data = Buffer.from(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855010203',
+      'hex');
 
-    let hash2 = Buffer.concat([digest.sha256(Buffer.alloc(0)), Buffer.from([1,2,3])]);
-    let enchash2 = nencrypt(hash2, 'foo');
-    let dechash2 = ndecrypt(enchash2, 'foo');
+    const expected = Buffer.from(''
+      + '83de502a9c83112ca6383f2214a892a0cdad5ab2b3e192e9'
+      + '921ddb126b25262c5211801019a30c0c6f795296923e0af8',
+      'hex');
 
-    assert.deepEqual(hash, hash2);
-    assert.deepEqual(enchash, enchash2);
-    assert.deepEqual(dechash, dechash2);
+    const ciphertext = aes.encipher(data, key, iv);
+    assert.bufferEqual(ciphertext, expected);
+
+    const plaintext = aes.decipher(ciphertext, key, iv);
+    assert.bufferEqual(plaintext, data);
   });
 });

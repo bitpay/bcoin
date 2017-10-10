@@ -17,17 +17,15 @@ function NodeContext(network, size) {
   this.init();
 };
 
-NodeContext.prototype.init = function() {
-  let i, port, last, node;
-
-  for (i = 0; i < this.size; i++) {
-    port = this.network.port + i;
-    last = port - 1;
+NodeContext.prototype.init = function init() {
+  for (let i = 0; i < this.size; i++) {
+    const port = this.network.port + i;
+    let last = port - 1;
 
     if (last < this.network.port)
       last = port;
 
-    node = new FullNode({
+    const node = new FullNode({
       network: this.network,
       db: 'memory',
       logger: new Logger({
@@ -46,7 +44,7 @@ NodeContext.prototype.init = function() {
       ]
     });
 
-    node.on('error', function(err) {
+    node.on('error', (err) => {
       node.logger.error(err);
     });
 
@@ -55,42 +53,40 @@ NodeContext.prototype.init = function() {
 };
 
 NodeContext.prototype.open = function open() {
-  let jobs = [];
+  const jobs = [];
 
-  for (let node of this.nodes)
+  for (const node of this.nodes)
     jobs.push(node.open());
 
   return Promise.all(jobs);
 };
 
 NodeContext.prototype.close = function close() {
-  let jobs = [];
+  const jobs = [];
 
-  for (let node of this.nodes)
+  for (const node of this.nodes)
     jobs.push(node.close());
 
   return Promise.all(jobs);
 };
 
 NodeContext.prototype.connect = async function connect() {
-  for (let node of this.nodes) {
+  for (const node of this.nodes) {
     await node.connect();
     await co.timeout(1000);
   }
 };
 
 NodeContext.prototype.disconnect = async function disconnect() {
-  let i, node;
-
-  for (i = this.nodes.length - 1; i >= 0; i--) {
-    node = this.nodes[i];
+  for (let i = this.nodes.length - 1; i >= 0; i--) {
+    const node = this.nodes[i];
     await node.disconnect();
     await co.timeout(1000);
   }
 };
 
 NodeContext.prototype.startSync = function startSync() {
-  for (let node of this.nodes) {
+  for (const node of this.nodes) {
     node.chain.synced = true;
     node.chain.emit('full');
     node.startSync();
@@ -98,24 +94,23 @@ NodeContext.prototype.startSync = function startSync() {
 };
 
 NodeContext.prototype.stopSync = function stopSync() {
-  for (let node of this.nodes)
+  for (const node of this.nodes)
     node.stopSync();
 };
 
 NodeContext.prototype.generate = async function generate(index, blocks) {
-  let node = this.nodes[index];
-  let i, block;
+  const node = this.nodes[index];
 
   assert(node);
 
-  for (i = 0; i < blocks; i++) {
-    block = await node.miner.mineBlock();
+  for (let i = 0; i < blocks; i++) {
+    const block = await node.miner.mineBlock();
     await node.chain.add(block);
   }
 };
 
 NodeContext.prototype.height = function height(index) {
-  let node = this.nodes[index];
+  const node = this.nodes[index];
 
   assert(node);
 

@@ -19,53 +19,49 @@ const db = bcoin.ldb({
 });
 
 function makeKey(data) {
-  let height = data.readUInt32LE(1, true);
-  let key = Buffer.allocUnsafe(5);
+  const height = data.readUInt32LE(1, true);
+  const key = Buffer.allocUnsafe(5);
   key[0] = 0x48;
   key.writeUInt32BE(height, 1, true);
   return key;
 }
 
 async function checkVersion() {
-  let data, ver;
-
   console.log('Checking version.');
 
-  data = await db.get('V');
+  const data = await db.get('V');
 
   if (!data)
     return;
 
-  ver = data.readUInt32LE(0, true);
+  const ver = data.readUInt32LE(0, true);
 
   if (ver !== 0)
     throw Error(`DB is version ${ver}.`);
 }
 
 async function updateState() {
-  let data, hash, batch, ver, p;
-
   console.log('Updating chain state.');
 
-  data = await db.get('R');
+  const data = await db.get('R');
 
   if (!data || data.length < 32)
     throw new Error('No chain state.');
 
-  hash = data.slice(0, 32);
+  const hash = data.slice(0, 32);
 
-  p = new BufferWriter();
+  let p = new BufferWriter();
   p.writeHash(hash);
   p.writeU64(0);
   p.writeU64(0);
   p.writeU64(0);
   p = p.render();
 
-  batch = db.batch();
+  const batch = db.batch();
 
   batch.put('R', p);
 
-  ver = Buffer.allocUnsafe(4);
+  const ver = Buffer.allocUnsafe(4);
   ver.writeUInt32LE(1, 0, true);
   batch.put('V', ver);
 
@@ -75,21 +71,20 @@ async function updateState() {
 }
 
 async function updateEndian() {
-  let batch = db.batch();
+  const batch = db.batch();
   let total = 0;
-  let iter, item;
 
   console.log('Updating endianness.');
   console.log('Iterating...');
 
-  iter = db.iterator({
+  const iter = db.iterator({
     gte: Buffer.from('4800000000', 'hex'),
     lte: Buffer.from('48ffffffff', 'hex'),
     values: true
   });
 
   for (;;) {
-    item = await iter.next();
+    const item = await iter.next();
 
     if (!item)
       break;

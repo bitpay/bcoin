@@ -5,15 +5,16 @@ const bench = require('./bench');
 const HD = require('../lib/hd');
 const Mnemonic = require('../lib/hd/mnemonic');
 
-let mnemonic = new Mnemonic();
+const mnemonic = new Mnemonic();
 HD.fromMnemonic(mnemonic);
 
-let phrase = mnemonic.getPhrase();
-let i, end;
+const phrase = mnemonic.getPhrase();
 
-assert.equal(Mnemonic.fromPhrase(phrase).getPhrase(), phrase);
+assert.strictEqual(Mnemonic.fromPhrase(phrase).getPhrase(), phrase);
 
-end = bench('fromPhrase');
-for (i = 0; i < 10000; i++)
-  Mnemonic.fromPhrase(phrase);
-end(i);
+{
+  const end = bench('fromPhrase');
+  for (let i = 0; i < 10000; i++)
+    Mnemonic.fromPhrase(phrase);
+  end(10000);
+}
