@@ -9,6 +9,7 @@ const encoding = require('../lib/utils/encoding');
 const Coin = require('../lib/primitives/coin');
 const Script = require('../lib/script/script');
 const Chain = require('../lib/blockchain/chain');
+const MDB = require('../lib/db/mongo');
 const WorkerPool = require('../lib/workers/workerpool');
 const Miner = require('../lib/mining/miner');
 const MTX = require('../lib/primitives/mtx');
@@ -25,10 +26,23 @@ const workers = new WorkerPool({
   enabled: true
 });
 
+const dbname = 'bcoin-test';
+const dbhost = 'localhost';
+
 const chain = new Chain({
-  db: 'memory',
+  db: 'mem',
   network,
-  workers
+  dbname,
+  dbhost,
+  workers,
+  prefix: '.',
+  indexTX: true,
+  indexAddress: true
+});
+
+const db = new MDB({
+  dbname,
+  dbhost
 });
 
 const miner = new Miner({
@@ -107,7 +121,12 @@ chain.on('disconnect', (entry, block) => {
 });
 
 describe('Chain', function() {
-  this.timeout(45000);
+  this.timeout(300000);
+
+  before(async function() {
+    await db.open();
+    await db.reset();
+  });
 
   it('should open chain and miner', async () => {
     await chain.open();
@@ -187,12 +206,10 @@ describe('Chain', function() {
 
     const block = await cpu.mineBlock(entry);
     assert(block);
-
     let forked = false;
     chain.once('reorganize', () => {
       forked = true;
     });
-
     assert(await chain.add(block));
 
     assert(forked);
@@ -864,6 +881,7 @@ describe('Chain', function() {
 
   it('should cleanup', async () => {
     await miner.close();
+    await db.reset();
     await chain.close();
   });
 });

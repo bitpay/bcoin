@@ -7,6 +7,7 @@ const assert = require('./util/assert');
 const consensus = require('../lib/protocol/consensus');
 const encoding = require('../lib/utils/encoding');
 const co = require('../lib/utils/co');
+const MDB = require('../lib/db/mongo');
 const Address = require('../lib/primitives/address');
 const Script = require('../lib/script/script');
 const Outpoint = require('../lib/primitives/outpoint');
@@ -15,13 +16,26 @@ const HTTP = require('../lib/http');
 const FullNode = require('../lib/node/fullnode');
 const pkg = require('../lib/pkg');
 
+const dbname = 'bcoin-test';
+const dbhost = 'localhost';
+
 const node = new FullNode({
   network: 'regtest',
+  dbname,
+  dbhost,
   apiKey: 'foo',
   walletAuth: true,
-  db: 'memory',
+  db: 'mem',
   workers: true,
+  prefix: '.',
+  indexTX: true,
+  indexAddress: true,
   plugins: [require('../lib/wallet/plugin')]
+});
+
+const db = new MDB({
+  dbname,
+  dbhost
 });
 
 const wallet = new HTTP.Wallet({
@@ -36,6 +50,12 @@ let hash = null;
 
 describe('HTTP', function() {
   this.timeout(15000);
+
+  before(async function () {
+    await db.open();
+    await db.reset();
+    await db.close();
+  });
 
   it('should open node', async () => {
     consensus.COINBASE_MATURITY = 0;
@@ -246,6 +266,7 @@ describe('HTTP', function() {
   it('should cleanup', async () => {
     consensus.COINBASE_MATURITY = 100;
     await wallet.close();
+    await db.reset();
     await node.close();
   });
 });

@@ -8,18 +8,32 @@ const consensus = require('../lib/protocol/consensus');
 const co = require('../lib/utils/co');
 const Coin = require('../lib/primitives/coin');
 const Script = require('../lib/script/script');
+const MDB = require('../lib/db/mongo');
 const Opcode = require('../lib/script/opcode');
 const FullNode = require('../lib/node/fullnode');
 const MTX = require('../lib/primitives/mtx');
 const TX = require('../lib/primitives/tx');
 const Address = require('../lib/primitives/address');
 
+const dbname = 'bcoin-test';
+const dbhost = 'localhost';
+
 const node = new FullNode({
-  db: 'memory',
+  db: 'mem',
   apiKey: 'foo',
   network: 'regtest',
   workers: true,
+  prefix: '.',
+  dbname,
+  dbhost,
+  indexTX: true,
+  indexAddress: true,
   plugins: [require('../lib/wallet/plugin')]
+});
+
+const db = new MDB({
+  dbname,
+  dbhost
 });
 
 const chain = node.chain;
@@ -83,7 +97,13 @@ async function mineCSV(fund) {
 }
 
 describe('Node', function() {
-  this.timeout(5000);
+  this.timeout(50000);
+
+  before(async function () {
+    await db.open();
+    await db.reset();
+    await db.close();
+  });
 
   it('should open chain and miner', async () => {
     miner.mempool = null;

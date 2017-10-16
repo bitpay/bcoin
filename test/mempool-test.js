@@ -14,24 +14,39 @@ const MTX = require('../lib/primitives/mtx');
 const Coin = require('../lib/primitives/coin');
 const KeyRing = require('../lib/primitives/keyring');
 const Address = require('../lib/primitives/address');
+const Network = require('../lib/protocol/network');
 const Outpoint = require('../lib/primitives/outpoint');
 const Script = require('../lib/script/script');
 const Witness = require('../lib/script/witness');
 const MemWallet = require('./util/memwallet');
 const ALL = Script.hashType.ALL;
 
+const dbname = 'bcoin-test';
+const dbhost = 'localhost';
+
+const network = Network.get('regtest');
+
 const workers = new WorkerPool({
   enabled: true
 });
 
 const chain = new Chain({
-  db: 'memory',
-  workers
+  db: 'mem',
+  dbname,
+  dbhost,
+  workers,
+  network,
+  prefix: '.',
+  indexTX: true,
+  indexAddress: true
 });
 
 const mempool = new Mempool({
   chain,
-  db: 'memory',
+  network,
+  db: 'mem',
+  dbname,
+  dbhost,
   workers
 });
 
